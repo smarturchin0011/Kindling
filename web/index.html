@@ -400,6 +400,11 @@ textarea,input,select{font-family:inherit;font-size:inherit}
 .test-ok{color:var(--ok)}
 .test-warn{color:var(--warn)}
 .test-err{color:var(--err)}
+.setup-box{
+  margin-top:10px;padding:11px 13px;background:#1a1112;border:1px solid #4a2f2f;
+  border-radius:7px;font-family:var(--mono);font-size:11px;color:#f0c4c4;
+  line-height:1.75;white-space:pre-wrap;
+}
 </style>
 </head>
 <body>
@@ -435,9 +440,10 @@ textarea,input,select{font-family:inherit;font-size:inherit}
           <div class="kv"><span>Provider</span><b id="s-provider">—</b></div>
           <div class="kv"><span>Endpoint</span><b id="s-endpoint" class="mono sm">—</b></div>
           <div class="kv"><span>API Key</span><b id="s-key" class="mono sm">—</b></div>
-          <div class="hint">Key 从项目 <code>.env</code> 的 <code>OPENROUTER_API_KEY</code> 读取，
-            找不到会回退到 Hermes 的 <code>.env</code>。改 key 需要重启服务；
-            改模型不用。</div>
+          <div class="setup-box" id="s-setup" style="display:none"></div>
+          <div class="hint">Key 只从项目根 <code>.env</code> 的
+            <code>OPENROUTER_API_KEY</code> 读取，不会去别处翻找。
+            改 key 需重启服务；改模型不用。</div>
         </div>
 
         <div class="sect">
@@ -1059,8 +1065,13 @@ function fillSettings(m){
   $('#s-provider').textContent = m.provider;
   $('#s-endpoint').textContent = m.endpoint;
   const k = $('#s-key');
-  k.textContent = m.has_key ? m.key_hint : '未设置 —— 无法调用 LLM';
+  k.textContent = m.has_key ? m.key_hint : '未配置';
   k.className = 'mono sm ' + (m.has_key ? 'test-ok' : 'test-err');
+  const setup = $('#s-setup');
+  if(m.setup_hint){
+    setup.textContent = m.setup_hint + '\n\n路径：' + (m.env_file||'');
+    setup.style.display = 'block';
+  } else setup.style.display = 'none';
   $('#s-model').value = s.model;
   $('#s-temp').value = s.temperature;
   $('#s-temp-val').textContent = Number(s.temperature).toFixed(2);

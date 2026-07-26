@@ -68,11 +68,12 @@ class OpenRouterClient:
         http: httpx.Client | None = None,
         temperature: float | None = None,
     ):
-        key = api_key if api_key is not None else os.environ.get("OPENROUTER_API_KEY", "")
+        key = api_key if api_key is not None else os.environ.get("OPENROUTER_API_KEY", "").strip()
         if not key:
             raise LLMError(
-                "缺少 OPENROUTER_API_KEY。在项目根目录建一个 .env 文件写入："
-                "OPENROUTER_API_KEY=sk-or-..."
+                "未配置 API key。在项目根目录创建 .env 文件，写入一行："
+                "OPENROUTER_API_KEY=sk-or-v1-你的key（在 https://openrouter.ai/keys 获取），"
+                "然后重启服务。可参考 .env.example。"
             )
         self.api_key = key
         # 模型/温度优先取运行时设置（设置面板改完立即生效，无需重启）

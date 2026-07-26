@@ -21,19 +21,34 @@ uv run python -m kindling          # → http://127.0.0.1:8777
 ```
 
 ```bash
-uv run pytest tests/ -q            # 100 passed，零网络依赖
+uv run pytest tests/ -q            # 103 passed，零网络依赖
 ```
 
 ## LLM 调用与模型设置
 
 **Provider：** OpenRouter — `POST https://openrouter.ai/api/v1/chat/completions`
 
-**API Key：** 从项目根 `.env` 读 `OPENROUTER_API_KEY`；找不到会自动回退到
-`~/AppData/Local/hermes/.env`。改 key 需重启服务。
+### 配置 API key（必须手动，没有自动回退）
 
-**模型：点右上角「设置」，改完立即生效，不需要重启。**
+```bash
+cp .env.example .env
+# 编辑 .env，填入你自己的 key
+```
 
-设置面板可调：
+```
+OPENROUTER_API_KEY=sk-or-v1-你的key
+```
+
+key 在 https://openrouter.ai/keys 获取。改完**重启服务**。
+
+> **只从项目根的 `.env` 或进程环境变量读取。** 刻意不去扫描 home 目录、
+> 也不读其他应用的配置文件 —— 隐式借用别处的凭据会让你不知道自己在消费
+> 哪个账号，还会让"key 没配"这个状态变得不可见。没配就明确报错，不静默降级。
+>
+> `.env` 已在 `.gitignore` 中。**永远不要提交它。**
+> 应用只报告 key「已配置 / 未配置」，绝不回显任何片段。
+
+### 模型（点右上角「设置」，改完立即生效，不需要重启）
 
 | 项 | 说明 |
 |---|---|
@@ -43,7 +58,7 @@ uv run pytest tests/ -q            # 100 passed，零网络依赖
 | 完整度阈值 | 默认 60%。调低更容易拿到框架 —— 但那正是「漂亮空框架」的来源 |
 | 最少证据 / 约束条数 | 闸门的结构性下限 |
 
-设置存在 `settings.json`（与 `state.json` 同目录）。
+设置存在 `settings.json`（与 `state.json` 同目录，均已 gitignore）。
 
 > **为什么「测试连通」要单独验 JSON：** 换模型最大的坑是某些模型不遵守
 > "只输出 JSON"，跑到缺口检测一半才炸。这个按钮让你 5 秒内验出来。

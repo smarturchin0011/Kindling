@@ -20,13 +20,25 @@ from .settings import MODEL_PRESETS, Settings, load_settings, save_settings
 from .store import MoveAlreadyOpen, Store
 from .synth import GateClosed, synthesize
 
-# .env 优先从项目根找，其次 Hermes 的 .env（用户 key 存在那里）
+# API key 只从项目根的 .env 或进程环境变量读取。
+#
+# 刻意不去扫描 home 目录或其他应用的配置文件：隐式借用别处的凭据会让
+# 用户不知道自己在消费哪个账号，也让"key 没配"这个状态变得不可见。
+# 配置必须是显式的 —— 见 .env.example。
 _ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(_ROOT / ".env")
-if not os.environ.get("OPENROUTER_API_KEY"):
-    hermes_env = Path.home() / "AppData" / "Local" / "hermes" / ".env"
-    if hermes_env.exists():
-        load_dotenv(hermes_env)
+
+
+def has_key() -> bool:
+    return bool(os.environ.get("OPENROUTER_API_KEY", "").strip())
+
+
+SETUP_HINT = (
+    "未配置 API key。在项目根目录创建 .env 文件，写入一行：\n"
+    "  OPENROUTER_API_KEY=sk-or-v1-你的key\n"
+    "key 在 https://openrouter.ai/keys 获取。可参考 .env.example。\n"
+    "改完 .env 需要重启服务（改模型不用）。"
+)
 
 WEB_DIR = _ROOT / "web"
 
@@ -86,11 +98,11 @@ class SettingsReq(BaseModel):
 
 
 def _key_hint() -> str:
-    """只回显首尾，永不回传完整密钥。"""
-    k = os.environ.get("OPENROUTER_API_KEY", "")
-    if not k:
-        return ""
-    return f"{k[:11]}…{k[-4:]}" if len(k) > 18 else "已设置"
+    """只报告"已配置/未配置"，绝不回显 key 的任何片段。
+
+    公开项目里回显前缀+后四位没有实际价值，却泄漏了可用于关联账号的信息。
+    """
+    return "已配置（不显示）" if has_key() else ""
 
 
 # ---------------- 错误处理 ----------------
@@ -116,7 +128,7 @@ def api_state():
     s = load_settings()
     snap["model"] = s.model
     snap["temperature"] = s.temperature
-    snap["has_key"] = bool(os.environ.get("OPENROUTER_API_KEY"))
+    snap["has_key"] = has_key()
     return snap
 
 
@@ -351,8 +363,10 @@ def api_get_settings():
         "presets": MODEL_PRESETS,
         "provider": "OpenRouter",
         "endpoint": API_URL,
-        "has_key": bool(os.environ.get("OPENROUTER_API_KEY")),
+        "has_key": has_key(),
         "key_hint": _key_hint(),
+        "setup_hint": "" if has_key() else SETUP_HINT,
+        "env_file": str(_ROOT / ".env"),
         "default_model": DEFAULT_MODEL,
     }
 

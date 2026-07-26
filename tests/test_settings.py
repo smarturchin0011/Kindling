@@ -1,4 +1,9 @@
-"""设置层测试：持久化、校验夹取、运行时生效（含闸门联动）。"""
+"""设置层测试：持久化、校验夹取、运行时生效（含闸门联动）、密钥不外泄。"""
+import json
+import os
+import re
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -145,16 +150,58 @@ def test_lowering_requirements_opens_gate():
 # ---------- HTTP ----------
 
 
-def test_get_settings_exposes_presets_and_masked_key(client):
+def test_get_settings_never_echoes_key_material(client):
+    """公开仓库：绝不回显 key 的任何片段，只报告已配置/未配置。"""
     body = client.get("/api/settings").json()
     assert body["provider"] == "OpenRouter"
     assert "openrouter.ai" in body["endpoint"]
     assert body["settings"]["model"]
     assert len(body["presets"]) >= 4
     assert body["has_key"] is True
-    # 关键：绝不回传完整密钥
-    assert "…" in body["key_hint"]
-    assert "abcdef" not in body["key_hint"]
+
+    blob = json.dumps(body, ensure_ascii=False)
+    key = os.environ["OPENROUTER_API_KEY"]
+    assert key not in blob                    # 完整 key 不出现
+    assert key[:12] not in blob               # 前缀也不出现
+    assert key[-6:] not in blob               # 后缀也不出现
+    assert body["key_hint"] == "已配置（不显示）"
+    assert body["setup_hint"] == ""           # 已配置时无需提示
+
+
+def test_missing_key_yields_actionable_setup_hint(client, monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    body = client.get("/api/settings").json()
+    assert body["has_key"] is False
+    assert body["key_hint"] == ""
+    hint = body["setup_hint"]
+    assert ".env" in hint and "OPENROUTER_API_KEY" in hint
+    assert "openrouter.ai/keys" in hint       # 告诉用户去哪拿
+    assert body["env_file"].endswith(".env")  # 告诉用户放哪
+
+
+def test_no_key_fails_loudly_not_silently(client, monkeypatch):
+    """没有 key 时必须明确报错，绝不能静默降级或借用别处凭据。"""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    api.set_llm(None)
+    client.post("/api/entries", json={"text": "想教AI产品", "type": "intent"})
+    r = client.post("/api/ask")
+    assert r.status_code == 502
+    assert ".env" in r.json()["error"]
+
+
+def test_source_never_reads_credentials_outside_project(client):
+    """回归防护：曾经有过"找不到就读 Hermes 的 .env"的逻辑。
+
+    在公开项目里隐式借用别处凭据是不可接受的 —— 用户不知道自己在消费
+    哪个账号，且审计者会合理地判断为可疑行为。
+    """
+    src = Path(api.__file__).resolve().parent
+    for py in src.glob("*.py"):
+        low = py.read_text(encoding="utf-8").lower()
+        assert "hermes" not in low, f"{py.name} 引用了外部应用的配置"
+        # 只允许加载项目根的 .env；不得把 home 目录路径喂给 load_dotenv
+        for call in re.findall(r"load_dotenv\(([^)]*)\)", low):
+            assert "home()" not in call, f"{py.name} 从 home 目录加载凭据: {call}"
 
 
 def test_post_settings_persists_and_returns_snapshot(client):

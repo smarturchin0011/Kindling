@@ -1,0 +1,359 @@
+"""流程层测试：缺口检测 → Move → 回流 → 闸门 → 综合。"""
+import json
+
+import pytest
+
+from kindling.completeness import score
+from kindling.context import ContextEntry, EntryType
+from kindling.gap import Gap, detect_gap
+from kindling.llm import LLMError, parse_json, strip_fence
+from kindling.moves import gap_to_move
+from kindling.reflux import reflux
+from kindling.store import MoveAlreadyOpen, Store
+from kindling.synth import GateClosed, expire_stale_frames, synthesize
+from kdfakes import FakeLLM
+from kdresponses import ACTION_GAP, ANSWERABLE_GAP, FRAMES
+
+
+def _ctx():
+    return [ContextEntry.new("想教别人 AI 产品知识", EntryType.INTENT)]
+
+
+def _rich():
+    return (
+        [ContextEntry.new(f"真实事故 {i}", EntryType.EVIDENCE) for i in range(3)]
+        + [ContextEntry.new(f"约束 {i}", EntryType.CONSTRAINT) for i in range(2)]
+        + [ContextEntry.new("想教 AI 产品", EntryType.INTENT)]
+    )
+
+
+def _action_gap(est=4):
+    return Gap(
+        question="PM 做错了什么决定？",
+        target_type=EntryType.EVIDENCE,
+        answerable_from_memory=False,
+        why_critical="没证据框架就是抽象的",
+        suggested_action="翻记录找 1 个具体决定，写 2 句话",
+        est_minutes=est,
+    )
+
+
+# ---------- JSON 解析健壮性 ----------
+
+
+def test_strip_fence_handles_json_block():
+    assert strip_fence('```json\n{"a":1}\n```') == '{"a":1}'
+    assert strip_fence('```\n{"a":1}\n```') == '{"a":1}'
+    assert strip_fence('{"a":1}') == '{"a":1}'
+
+
+def test_parse_json_recovers_from_prose_wrapper():
+    """模型爱在 JSON 前后加话。必须能救回来。"""
+    assert parse_json('好的，这是结果：\n{"question":"x"}\n希望有帮助') == {"question": "x"}
+
+
+def test_parse_json_raises_on_garbage():
+    with pytest.raises(LLMError):
+        parse_json("完全不是 JSON 的一段话")
+
+
+# ---------- 缺口检测 ----------
+
+
+def test_detect_answerable_gap():
+    g = detect_gap("教AI产品", _ctx(), FakeLLM([ANSWERABLE_GAP]))
+    assert g.answerable_from_memory is True
+    assert g.target_type is EntryType.CONSTRAINT
+    assert g.suggested_action == ""
+
+
+def test_detect_action_gap_carries_action():
+    g = detect_gap("教AI产品", _ctx(), FakeLLM([ACTION_GAP]))
+    assert g.answerable_from_memory is False
+    assert g.target_type is EntryType.EVIDENCE
+    assert "翻最近的工作记录" in g.suggested_action
+    assert g.est_minutes == 4
+
+
+def test_unanswerable_without_action_degrades_gracefully():
+    """答不上来却不给动作 = 死路。降级为可答，而不是崩溃。"""
+    bad = json.dumps(
+        {
+            "question": "q",
+            "target_type": "evidence",
+            "answerable_from_memory": False,
+            "why_critical": "w",
+        },
+        ensure_ascii=False,
+    )
+    g = detect_gap("t", _ctx(), FakeLLM([bad]))
+    assert g.answerable_from_memory is True
+
+
+def test_oversized_estimate_is_clamped():
+    big = json.dumps(
+        {
+            "question": "q",
+            "target_type": "evidence",
+            "answerable_from_memory": False,
+            "why_critical": "w",
+            "suggested_action": "做点大事",
+            "est_minutes": 45,
+        },
+        ensure_ascii=False,
+    )
+    g = detect_gap("t", _ctx(), FakeLLM([big]))
+    assert g.est_minutes == 5
+
+
+def test_unknown_target_type_falls_back():
+    weird = json.dumps(
+        {
+            "question": "q",
+            "target_type": "vibes",
+            "answerable_from_memory": True,
+            "why_critical": "w",
+        },
+        ensure_ascii=False,
+    )
+    assert detect_gap("t", _ctx(), FakeLLM([weird])).target_type is EntryType.FACT
+
+
+def test_prompt_includes_typed_context_and_evidence_count():
+    llm = FakeLLM([ANSWERABLE_GAP])
+    detect_gap("教AI产品", _ctx(), llm)
+    sent = llm.calls[0]["user"]
+    assert "intent" in sent
+    assert "想教别人 AI 产品知识" in sent
+    assert "evidence 0 条" in sent
+
+
+def test_gate_missing_is_fed_into_prompt():
+    """闸门联动：不告诉检测器还缺什么类型，它会一直问同一类，
+    用户看着 85% 却打不开闸门，不知道该补什么。"""
+    from kindling.completeness import gate_status
+
+    ctx = [ContextEntry.new(f"事故{i}", EntryType.EVIDENCE) for i in range(4)]
+    gate = gate_status(ctx)
+    assert not gate["open"]          # 缺约束
+    llm = FakeLLM([ANSWERABLE_GAP])
+    detect_gap("t", ctx, llm, gate=gate)
+    sent = llm.calls[0]["user"]
+    assert "闸门还缺" in sent
+    assert "约束" in sent
+
+
+def test_open_gate_adds_no_pressure_block():
+    from kindling.completeness import gate_status
+
+    ctx = _rich()
+    llm = FakeLLM([ANSWERABLE_GAP])
+    detect_gap("t", ctx, llm, gate=gate_status(ctx))
+    assert "闸门还缺" not in llm.calls[0]["user"]
+
+
+# ---------- Move ----------
+
+
+def test_move_records_what_it_retrieves():
+    m = gap_to_move(_action_gap())
+    assert m.retrieves_type is EntryType.EVIDENCE
+    assert "没证据" in m.retrieves_why
+    assert m.est_minutes == 4
+    assert m.status == "open"
+    assert m.retrieves_label_zh == "证据"
+
+
+def test_answerable_gap_cannot_become_move():
+    g = Gap("受众是谁", EntryType.CONSTRAINT, True, "w")
+    with pytest.raises(ValueError, match="能凭记忆回答"):
+        gap_to_move(g)
+
+
+def test_oversized_gap_rejected_at_move():
+    with pytest.raises(ValueError, match="上限 5"):
+        gap_to_move(_action_gap(est=30))
+
+
+def test_move_roundtrip():
+    m = gap_to_move(_action_gap())
+    back = type(m).from_dict(m.to_dict())
+    assert back.retrieves_type is EntryType.EVIDENCE
+    assert back.description == m.description
+
+
+# ---------- 回流（飞轮） ----------
+
+
+def test_reflux_creates_typed_entry_linked_to_move():
+    m = gap_to_move(_action_gap())
+    ctx: list[ContextEntry] = []
+    reflux(m, "PM 要求 100% 准确率，项目卡了三周", ctx)
+    assert m.status == "done"
+    assert len(ctx) == 1
+    assert ctx[0].type is EntryType.EVIDENCE
+    assert ctx[0].source == "action"
+    assert ctx[0].move_id == m.id
+
+
+def test_reflux_raises_completeness():
+    """飞轮的核心断言：行动让上下文变厚。"""
+    ctx = [ContextEntry.new("想教AI产品", EntryType.INTENT)]
+    before = score(ctx)
+    reflux(gap_to_move(_action_gap()), "一条真实证据", ctx)
+    assert score(ctx) > before
+
+
+def test_reflux_chunks_long_artifact():
+    ctx: list[ContextEntry] = []
+    reflux(gap_to_move(_action_gap()), "x" * 700, ctx)
+    assert len(ctx) == 3
+    assert all(len(e.text) <= 280 for e in ctx)
+
+
+def test_reflux_rejects_empty_artifact():
+    with pytest.raises(ValueError):
+        reflux(gap_to_move(_action_gap()), "   ", [])
+
+
+def test_reflux_rejects_closed_move():
+    m = gap_to_move(_action_gap())
+    m.status = "done"
+    with pytest.raises(RuntimeError):
+        reflux(m, "something", [])
+
+
+# ---------- 综合 + 闸门 ----------
+
+
+def test_gate_blocks_thin_context():
+    thin = [ContextEntry.new("想教AI产品", EntryType.INTENT)]
+    with pytest.raises(GateClosed) as exc:
+        synthesize("教AI产品", thin, FakeLLM([FRAMES]))
+    assert "证据" in str(exc.value) or "证据" in str(exc.value.gate["missing"])
+    assert exc.value.gate["open"] is False
+
+
+def test_force_bypasses_gate_but_is_flagged():
+    thin = [ContextEntry.new("想教AI产品", EntryType.INTENT)]
+    frames = synthesize("教AI产品", thin, FakeLLM([FRAMES]), force=True)
+    assert len(frames) == 2
+    assert all(f.forced is True for f in frames)
+
+
+def test_rich_context_passes_gate():
+    frames = synthesize("教AI产品", _rich(), FakeLLM([FRAMES]))
+    assert len(frames) == 2
+    assert all(f.sacrifices for f in frames)
+    assert all(f.forced is False for f in frames)
+
+
+def test_single_frame_rejected():
+    """只给一个框架会破坏择优机制。"""
+    one = json.dumps({"frames": [json.loads(FRAMES)["frames"][0]]}, ensure_ascii=False)
+    with pytest.raises(ValueError, match="至少 2"):
+        synthesize("t", _rich(), FakeLLM([one]))
+
+
+def test_frame_missing_sacrifices_rejected():
+    """没有 tradeoff 的框架是假框架。"""
+    bad = json.loads(FRAMES)
+    bad["frames"][0]["sacrifices"] = ""
+    with pytest.raises(ValueError, match="sacrifices"):
+        synthesize("t", _rich(), FakeLLM([json.dumps(bad, ensure_ascii=False)]))
+
+
+def test_hallucinated_grounding_ids_filtered():
+    """模型编造的条目 id 必须被丢掉，否则"基于证据 N 条"会撒谎。"""
+    spec = json.loads(FRAMES)
+    ctx = _rich()
+    spec["frames"][0]["grounded_in_entries"] = [ctx[0].id, "ctx_fake123"]
+    frames = synthesize(
+        "t", ctx, FakeLLM([json.dumps(spec, ensure_ascii=False)])
+    )
+    assert frames[0].grounded_in_entries == [ctx[0].id]
+    assert frames[0].grounded_count == 1
+
+
+def test_synth_prompt_includes_entry_ids():
+    ctx = _rich()
+    llm = FakeLLM([FRAMES])
+    synthesize("t", ctx, llm)
+    assert ctx[0].id in llm.calls[0]["user"]
+
+
+def test_expire_stale_frames():
+    from datetime import datetime, timedelta, timezone
+
+    frames = synthesize("t", _rich(), FakeLLM([FRAMES]))
+    frames[0].created_at = (
+        datetime.now(timezone.utc) - timedelta(hours=100)
+    ).isoformat()
+    assert expire_stale_frames(frames) == 1
+    assert frames[0].status == "expired"
+    assert frames[1].status == "candidate"
+
+
+def test_picked_frames_never_expire():
+    from datetime import datetime, timedelta, timezone
+
+    frames = synthesize("t", _rich(), FakeLLM([FRAMES]))
+    frames[0].status = "picked"
+    frames[0].created_at = (
+        datetime.now(timezone.utc) - timedelta(hours=500)
+    ).isoformat()
+    assert expire_stale_frames(frames) == 0
+
+
+# ---------- Store ----------
+
+
+def test_store_roundtrip_preserves_types(tmp_path):
+    st = Store(tmp_path / "s.json", topic="教AI产品")
+    st.add_entry(ContextEntry.new("受众是PM", EntryType.CONSTRAINT))
+    st.add_move(gap_to_move(_action_gap()))
+    st.frames.extend(synthesize("t", _rich(), FakeLLM([FRAMES])))
+    st.save()
+
+    st2 = Store(tmp_path / "s.json").load()
+    assert st2.topic == "教AI产品"
+    assert st2.entries[0].type is EntryType.CONSTRAINT
+    assert st2.moves[0].retrieves_type is EntryType.EVIDENCE
+    assert st2.open_move() is not None
+    assert len(st2.candidate_frames()) == 2
+
+
+def test_single_open_move_enforced(tmp_path):
+    st = Store(tmp_path / "s.json")
+    st.add_move(gap_to_move(_action_gap()))
+    with pytest.raises(MoveAlreadyOpen):
+        st.add_move(gap_to_move(_action_gap()))
+
+
+def test_new_move_allowed_after_done(tmp_path):
+    st = Store(tmp_path / "s.json")
+    m = st.add_move(gap_to_move(_action_gap()))
+    reflux(m, "拿到了证据", st.entries)
+    st.add_move(gap_to_move(_action_gap()))
+    assert len(st.moves) == 2
+    assert len(st.done_moves()) == 1
+
+
+def test_store_missing_file_is_empty(tmp_path):
+    st = Store(tmp_path / "nope.json").load()
+    assert st.entries == [] and st.moves == [] and st.frames == []
+
+
+def test_store_survives_corrupt_file(tmp_path):
+    p = tmp_path / "bad.json"
+    p.write_text("{not json at all", encoding="utf-8")
+    st = Store(p).load()
+    assert st.entries == []
+
+
+def test_snapshot_shape(tmp_path):
+    st = Store(tmp_path / "s.json")
+    snap = st.snapshot()
+    for key in ("gate", "entries", "open_move", "candidate_frames", "cycles"):
+        assert key in snap
+    assert snap["gate"]["open"] is False

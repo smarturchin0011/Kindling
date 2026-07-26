@@ -53,13 +53,20 @@ def parse_json(text: str, stage: str = "llm") -> dict:
         raise LLMError(f"模型没有返回合法 JSON。原文开头：{cleaned[:200]}")
 
 
+def _scrub(text: str) -> str:
+    """从上游错误里剔掉账号标识，避免它出现在 UI 和 log 里。"""
+    text = re.sub(r'"?user_id"?\s*:\s*"[^"]*",?', "", text)
+    text = re.sub(r"\buser_[A-Za-z0-9]{8,}\b", "user_***", text)
+    return text.strip().rstrip(",").strip()
+
+
 class OpenRouterClient:
     def __init__(
         self,
         api_key: str | None = None,
         model: str | None = None,
         http: httpx.Client | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = None,
     ):
         key = api_key if api_key is not None else os.environ.get("OPENROUTER_API_KEY", "")
         if not key:
@@ -68,7 +75,14 @@ class OpenRouterClient:
                 "OPENROUTER_API_KEY=sk-or-..."
             )
         self.api_key = key
-        self.model = model or os.environ.get("KINDLING_MODEL", DEFAULT_MODEL)
+        # 模型/温度优先取运行时设置（设置面板改完立即生效，无需重启）
+        if model is None or temperature is None:
+            from .settings import load_settings
+
+            s = load_settings()
+            model = model or s.model
+            temperature = s.temperature if temperature is None else temperature
+        self.model = model
         self.temperature = temperature
         self.http = http or httpx.Client(timeout=120.0)
 
@@ -107,7 +121,7 @@ class OpenRouterClient:
                 raise LLMError(f"调用 LLM 失败：{e}") from e
 
         if resp.status_code != 200:
-            body = resp.text[:800]
+            body = _scrub(resp.text[:800])
             log(
                 stage,
                 f"HTTP {resp.status_code}",

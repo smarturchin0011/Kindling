@@ -34,29 +34,42 @@ def counts(entries: list[ContextEntry]) -> Counter:
     return Counter(e.type for e in entries)
 
 
-def gate_status(entries: list[ContextEntry]) -> dict:
-    """闸门状态 + 可向用户解释的缺口清单。"""
+def gate_status(
+    entries: list[ContextEntry],
+    threshold: float | None = None,
+    min_evidence: int | None = None,
+    min_constraints: int | None = None,
+) -> dict:
+    """闸门状态 + 可向用户解释的缺口清单。
+
+    阈值可由运行时设置覆盖（settings.json）。不传则用模块默认值，
+    这样纯域层测试不必依赖设置文件。
+    """
+    thr = GATE_THRESHOLD if threshold is None else float(threshold)
+    need_ev = MIN_EVIDENCE if min_evidence is None else int(min_evidence)
+    need_con = MIN_CONSTRAINTS if min_constraints is None else int(min_constraints)
+
     c = counts(entries)
     s = score(entries)
     missing: list[str] = []
 
     n_ev = c[EntryType.EVIDENCE]
-    if n_ev < MIN_EVIDENCE:
-        missing.append(f"至少 {MIN_EVIDENCE} 条证据（现在 {n_ev} 条）")
+    if n_ev < need_ev:
+        missing.append(f"至少 {need_ev} 条证据（现在 {n_ev} 条）")
 
     n_con = c[EntryType.CONSTRAINT]
-    if n_con < MIN_CONSTRAINTS:
-        missing.append(f"至少 {MIN_CONSTRAINTS} 条约束（现在 {n_con} 条）")
+    if n_con < need_con:
+        missing.append(f"至少 {need_con} 条约束（现在 {n_con} 条）")
 
-    if s < GATE_THRESHOLD:
-        missing.append(f"完整度需达到 {GATE_THRESHOLD:.0%}（现在 {s:.0%}）")
+    if s < thr:
+        missing.append(f"完整度需达到 {thr:.0%}（现在 {s:.0%}）")
 
     return {
         "score": round(s, 4),
         "percent": round(s * 100),
         "open": not missing,
         "missing": missing,
-        "threshold": GATE_THRESHOLD,
+        "threshold": thr,
         "counts": {k.value: v for k, v in c.items()},
         "total_entries": len(entries),
     }

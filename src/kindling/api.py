@@ -12,10 +12,11 @@ from pydantic import BaseModel, Field
 from .completeness import GATE_THRESHOLD
 from .context import ContextEntry, EntryTooLong, EntryType
 from .gap import Gap, detect_gap
-from .llm import LLMClient, LLMError, OpenRouterClient
+from .llm import API_URL, DEFAULT_MODEL, LLMClient, LLMError, OpenRouterClient, parse_json
 from .moves import gap_to_move
 from .observability import clear_logs, get_logs, log
 from .reflux import reflux
+from .settings import MODEL_PRESETS, Settings, load_settings, save_settings
 from .store import MoveAlreadyOpen, Store
 from .synth import GateClosed, synthesize
 
@@ -76,6 +77,22 @@ class SynthReq(BaseModel):
     force: bool = False
 
 
+class SettingsReq(BaseModel):
+    model: str | None = None
+    temperature: float | None = None
+    gate_threshold: float | None = None
+    min_evidence: int | None = None
+    min_constraints: int | None = None
+
+
+def _key_hint() -> str:
+    """只回显首尾，永不回传完整密钥。"""
+    k = os.environ.get("OPENROUTER_API_KEY", "")
+    if not k:
+        return ""
+    return f"{k[:11]}…{k[-4:]}" if len(k) > 18 else "已设置"
+
+
 # ---------------- 错误处理 ----------------
 
 
@@ -96,7 +113,9 @@ def index():
 def api_state():
     st = load_store()
     snap = st.snapshot()
-    snap["model"] = os.environ.get("KINDLING_MODEL", "anthropic/claude-sonnet-4.5")
+    s = load_settings()
+    snap["model"] = s.model
+    snap["temperature"] = s.temperature
     snap["has_key"] = bool(os.environ.get("OPENROUTER_API_KEY"))
     return snap
 
@@ -234,7 +253,11 @@ def api_synth(req: SynthReq):
     st = load_store()
     try:
         frames = synthesize(
-            st.topic or "未命名议题", st.entries, get_llm(), force=req.force
+            st.topic or "未命名议题",
+            st.entries,
+            get_llm(),
+            force=req.force,
+            gate=st.completeness(),
         )
     except GateClosed as exc:
         return JSONResponse(
@@ -315,6 +338,88 @@ def api_pick(frame_id: str):
 @app.get("/api/logs")
 def api_logs(since: int = 0):
     return {"logs": get_logs(since)}
+
+
+# ---------------- 设置（模型可手动调整） ----------------
+
+
+@app.get("/api/settings")
+def api_get_settings():
+    s = load_settings()
+    return {
+        "settings": s.to_dict(),
+        "presets": MODEL_PRESETS,
+        "provider": "OpenRouter",
+        "endpoint": API_URL,
+        "has_key": bool(os.environ.get("OPENROUTER_API_KEY")),
+        "key_hint": _key_hint(),
+        "default_model": DEFAULT_MODEL,
+    }
+
+
+@app.post("/api/settings")
+def api_set_settings(req: SettingsReq):
+    cur = load_settings()
+    merged = Settings(
+        model=req.model if req.model is not None else cur.model,
+        temperature=(
+            req.temperature if req.temperature is not None else cur.temperature
+        ),
+        gate_threshold=(
+            req.gate_threshold
+            if req.gate_threshold is not None
+            else cur.gate_threshold
+        ),
+        min_evidence=(
+            req.min_evidence if req.min_evidence is not None else cur.min_evidence
+        ),
+        min_constraints=(
+            req.min_constraints
+            if req.min_constraints is not None
+            else cur.min_constraints
+        ),
+    )
+    saved = save_settings(merged)
+    # 闸门阈值可能变了 —— 回传新快照，前端立即重算完整度环
+    st = load_store()
+    return {"settings": saved.to_dict(), **st.snapshot()}
+
+
+@app.post("/api/settings/test")
+def api_test_model(req: SettingsReq):
+    """用指定模型发一个最小请求，确认它真的可用（而且会返回 JSON）。
+
+    换模型最大的坑是某些模型不遵守"只输出 JSON"，跑到一半才炸。
+    这个端点让你在正式用之前 5 秒内验出来。
+    """
+    model = (req.model or load_settings().model).strip()
+    try:
+        client = OpenRouterClient(model=model, temperature=0)
+        raw = client.complete(
+            system='你是一个测试端点。只输出 JSON，不要任何其他文字。',
+            user='输出这个 JSON：{"ok":true,"say":"你好"}',
+            stage="llm",
+        )
+    except LLMError as e:
+        return JSONResponse(
+            status_code=502, content={"ok": False, "model": model, "error": str(e)}
+        )
+    try:
+        parsed = parse_json(raw, stage="llm")
+        json_ok = bool(parsed.get("ok"))
+    except LLMError:
+        parsed, json_ok = None, False
+    return {
+        "ok": True,
+        "model": model,
+        "json_compliant": json_ok,
+        "raw": raw[:400],
+        "note": (
+            "可用，且能稳定返回 JSON。"
+            if json_ok
+            else "能连通，但没有干净返回 JSON —— 用它跑缺口检测可能会不稳定。"
+        ),
+    }
 
 
 @app.delete("/api/logs")

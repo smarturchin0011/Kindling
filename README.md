@@ -20,12 +20,36 @@ uv sync --extra dev
 uv run python -m kindling          # → http://127.0.0.1:8777
 ```
 
-API key 从 `.env` 读 `OPENROUTER_API_KEY`，找不到会自动回退到
-`~/AppData/Local/hermes/.env`。模型用 `KINDLING_MODEL` 覆盖。
-
 ```bash
-uv run pytest tests/ -q            # 80 passed，零网络依赖
+uv run pytest tests/ -q            # 100 passed，零网络依赖
 ```
+
+## LLM 调用与模型设置
+
+**Provider：** OpenRouter — `POST https://openrouter.ai/api/v1/chat/completions`
+
+**API Key：** 从项目根 `.env` 读 `OPENROUTER_API_KEY`；找不到会自动回退到
+`~/AppData/Local/hermes/.env`。改 key 需重启服务。
+
+**模型：点右上角「设置」，改完立即生效，不需要重启。**
+
+设置面板可调：
+
+| 项 | 说明 |
+|---|---|
+| 模型 | 8 个预设一键切换，或手填任何 OpenRouter 模型 id |
+| 测试连通 | 发一个最小请求，验证模型可用 **且能干净返回 JSON** |
+| Temperature | 0–2。缺口检测建议 0.3–0.8 |
+| 完整度阈值 | 默认 60%。调低更容易拿到框架 —— 但那正是「漂亮空框架」的来源 |
+| 最少证据 / 约束条数 | 闸门的结构性下限 |
+
+设置存在 `settings.json`（与 `state.json` 同目录）。
+
+> **为什么「测试连通」要单独验 JSON：** 换模型最大的坑是某些模型不遵守
+> "只输出 JSON"，跑到缺口检测一半才炸。这个按钮让你 5 秒内验出来。
+
+`KINDLING_MODEL` 环境变量仍受支持，但只在首次启动（还没有 settings.json 时）生效，
+之后由设置面板接管。
 
 ## 六层架构
 

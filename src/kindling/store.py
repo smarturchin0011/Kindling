@@ -111,7 +111,16 @@ class Store:
         return [m for m in self.moves if m.status == "done"]
 
     def completeness(self) -> dict:
-        return gate_status(self.entries)
+        """闸门状态。阈值来自运行时设置，改完立即生效。"""
+        from .settings import load_settings
+
+        s = load_settings()
+        return gate_status(
+            self.entries,
+            threshold=s.gate_threshold,
+            min_evidence=s.min_evidence,
+            min_constraints=s.min_constraints,
+        )
 
     def snapshot(self) -> dict:
         """给前端的完整状态。"""

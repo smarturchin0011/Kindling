@@ -325,6 +325,81 @@ textarea,input,select{font-family:inherit;font-size:inherit}
 .toast.err{border-color:#4a2a2a;color:#f0a0a0}
 .toast.ok{border-color:#2a4a37;color:#9fe0b8}
 .sep{width:1px;height:18px;background:var(--line)}
+
+/* ---------- settings modal ---------- */
+.modal-back{
+  position:fixed;inset:0;background:rgba(4,5,9,.76);backdrop-filter:blur(3px);
+  z-index:200;display:none;align-items:center;justify-content:center;padding:28px;
+}
+.modal-back.open{display:flex;animation:fade .16s ease}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.modal{
+  background:var(--bg-2);border:1px solid var(--line-2);border-radius:13px;
+  width:100%;max-width:620px;max-height:88vh;display:flex;flex-direction:column;
+  box-shadow:0 22px 70px rgba(0,0,0,.62);animation:rise .2s ease;
+}
+.modal-head{
+  display:flex;align-items:center;padding:15px 20px;
+  border-bottom:1px solid var(--line);flex-shrink:0;
+}
+.modal-title{font-size:15px;font-weight:600}
+.modal-head .btn{margin-left:auto}
+.modal-body{overflow-y:auto;padding:6px 20px 14px}
+.modal-foot{
+  display:flex;align-items:center;gap:9px;padding:13px 20px;
+  border-top:1px solid var(--line);flex-shrink:0;
+}
+.modal-foot .btn:nth-last-child(2){margin-left:auto}
+.sect{padding:16px 0;border-bottom:1px solid var(--line)}
+.sect:last-child{border-bottom:none}
+.sect-title{
+  font-size:10.5px;letter-spacing:1px;text-transform:uppercase;
+  color:var(--fg-3);font-family:var(--mono);margin-bottom:12px;
+}
+.kv{display:flex;align-items:baseline;gap:10px;font-size:12.5px;margin-bottom:6px}
+.kv span{color:var(--fg-3);width:76px;flex-shrink:0}
+.kv b{color:var(--fg-2);font-weight:500;word-break:break-all}
+.mono{font-family:var(--mono)}
+.sm{font-size:11.5px}
+.hint{font-size:11.5px;color:var(--fg-3);line-height:1.65;margin-top:9px}
+.hint code{
+  font-family:var(--mono);font-size:10.5px;background:var(--bg-4);
+  padding:1px 4px;border-radius:3px;color:var(--fg-2);
+}
+.hint-inline{font-size:10.5px;color:var(--fg-3);font-weight:400;margin-left:7px}
+.field{margin-top:13px}
+.field label{
+  display:block;font-size:12px;color:var(--fg-2);margin-bottom:6px;font-weight:500;
+}
+.field input[type=text],.field input:not([type]),.field input[type=number]{
+  width:100%;background:var(--bg);border:1px solid var(--line-2);border-radius:7px;
+  color:var(--fg);padding:8px 11px;outline:none;transition:border-color .15s;
+}
+.field input:focus{border-color:#4a5470}
+.field input[type=range]{
+  width:100%;-webkit-appearance:none;appearance:none;height:4px;
+  background:var(--bg-4);border-radius:3px;outline:none;
+}
+.field input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:15px;height:15px;border-radius:50%;
+  background:var(--acc);cursor:pointer;border:2px solid var(--bg-2);
+}
+.row{display:flex;gap:9px;align-items:flex-end}
+.row .grow{flex:1;margin-top:0}
+.row input{flex:1}
+.preset-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.preset{
+  text-align:left;background:var(--bg-3);border:1px solid var(--line);
+  border-radius:8px;padding:9px 11px;transition:border-color .15s,background .15s;
+}
+.preset:hover{border-color:#3f4860;background:var(--bg-4)}
+.preset.on{border-color:var(--acc);background:#1f1a10}
+.preset-name{font-size:12.5px;font-weight:600;color:var(--fg);margin-bottom:2px}
+.preset-id{font-family:var(--mono);font-size:9.5px;color:var(--fg-3);margin-bottom:3px;word-break:break-all}
+.preset-note{font-size:10.5px;color:var(--fg-3);line-height:1.5}
+.test-ok{color:var(--ok)}
+.test-warn{color:var(--warn)}
+.test-err{color:var(--err)}
 </style>
 </head>
 <body>
@@ -342,7 +417,73 @@ textarea,input,select{font-family:inherit;font-size:inherit}
       <span class="pill" id="pill-model">—</span>
       <span class="pill" id="pill-key">key?</span>
       <div class="sep"></div>
+      <button class="btn ghost sm" id="btn-settings">设置</button>
       <button class="btn ghost sm" id="btn-log">内部 Log</button>
+    </div>
+  </div>
+
+  <div class="modal-back" id="modal-back">
+    <div class="modal">
+      <div class="modal-head">
+        <span class="modal-title">设置</span>
+        <button class="btn ghost sm" id="btn-close-settings">关闭</button>
+      </div>
+      <div class="modal-body">
+
+        <div class="sect">
+          <div class="sect-title">API 提供方</div>
+          <div class="kv"><span>Provider</span><b id="s-provider">—</b></div>
+          <div class="kv"><span>Endpoint</span><b id="s-endpoint" class="mono sm">—</b></div>
+          <div class="kv"><span>API Key</span><b id="s-key" class="mono sm">—</b></div>
+          <div class="hint">Key 从项目 <code>.env</code> 的 <code>OPENROUTER_API_KEY</code> 读取，
+            找不到会回退到 Hermes 的 <code>.env</code>。改 key 需要重启服务；
+            改模型不用。</div>
+        </div>
+
+        <div class="sect">
+          <div class="sect-title">模型</div>
+          <div class="preset-grid" id="s-presets"></div>
+          <div class="field">
+            <label>自定义模型 ID（任何 OpenRouter 模型都可以）</label>
+            <div class="row">
+              <input id="s-model" class="mono" placeholder="vendor/model-name">
+              <button class="btn sm" id="btn-test">测试连通</button>
+            </div>
+            <div class="hint" id="s-test-out"></div>
+          </div>
+          <div class="field">
+            <label>Temperature <span class="mono" id="s-temp-val">0.7</span>
+              <span class="hint-inline">缺口检测建议 0.3–0.8；调高更发散，调低更稳定</span></label>
+            <input type="range" id="s-temp" min="0" max="2" step="0.05">
+          </div>
+        </div>
+
+        <div class="sect">
+          <div class="sect-title">闸门（框架生成的准入条件）</div>
+          <div class="field">
+            <label>完整度阈值 <span class="mono" id="s-thr-val">60%</span></label>
+            <input type="range" id="s-thr" min="5" max="95" step="5">
+          </div>
+          <div class="row">
+            <div class="field grow">
+              <label>最少证据条数</label>
+              <input type="number" id="s-ev" min="0" max="20">
+            </div>
+            <div class="field grow">
+              <label>最少约束条数</label>
+              <input type="number" id="s-con" min="0" max="20">
+            </div>
+          </div>
+          <div class="hint">调低会让你更容易拿到框架 —— 但那正是「漂亮空框架」的来源。
+            如果你频繁想调低，先想想是不是该去补一条真实证据。</div>
+        </div>
+
+      </div>
+      <div class="modal-foot">
+        <span class="hint" id="s-status"></span>
+        <button class="btn ghost sm" id="btn-reset-settings">恢复默认</button>
+        <button class="btn primary sm" id="btn-save-settings">保存并生效</button>
+      </div>
     </div>
   </div>
 
@@ -892,6 +1033,99 @@ async function pollLogs(){
   }catch(_){}
 }
 
+/* ---------------- settings ---------------- */
+let SETTINGS_META = null;
+
+function renderPresets(){
+  const box = $('#s-presets'); box.innerHTML = '';
+  const cur = $('#s-model').value.trim();
+  for(const p of (SETTINGS_META.presets||[])){
+    const b = el('button','preset'+(p.id===cur?' on':''));
+    b.appendChild(el('div','preset-name', p.label));
+    b.appendChild(el('div','preset-id', p.id));
+    b.appendChild(el('div','preset-note', p.note));
+    b.onclick = ()=>{
+      $('#s-model').value = p.id;
+      $('#s-test-out').textContent = '';
+      renderPresets();
+    };
+    box.appendChild(b);
+  }
+}
+
+function fillSettings(m){
+  SETTINGS_META = m;
+  const s = m.settings;
+  $('#s-provider').textContent = m.provider;
+  $('#s-endpoint').textContent = m.endpoint;
+  const k = $('#s-key');
+  k.textContent = m.has_key ? m.key_hint : '未设置 —— 无法调用 LLM';
+  k.className = 'mono sm ' + (m.has_key ? 'test-ok' : 'test-err');
+  $('#s-model').value = s.model;
+  $('#s-temp').value = s.temperature;
+  $('#s-temp-val').textContent = Number(s.temperature).toFixed(2);
+  $('#s-thr').value = Math.round(s.gate_threshold*100);
+  $('#s-thr-val').textContent = Math.round(s.gate_threshold*100)+'%';
+  $('#s-ev').value = s.min_evidence;
+  $('#s-con').value = s.min_constraints;
+  $('#s-status').textContent = '';
+  $('#s-test-out').textContent = '';
+  renderPresets();
+}
+
+async function openSettings(){
+  try{
+    fillSettings(await req('GET','/api/settings'));
+    $('#modal-back').classList.add('open');
+  }catch(e){ toast('读取设置失败：'+e.message,'err'); }
+}
+function closeSettings(){ $('#modal-back').classList.remove('open'); }
+
+async function saveSettings(){
+  const btn = $('#btn-save-settings');
+  btn.disabled = true;
+  $('#s-status').textContent = '保存中…';
+  try{
+    const body = await req('POST','/api/settings',{
+      model: $('#s-model').value.trim(),
+      temperature: parseFloat($('#s-temp').value),
+      gate_threshold: parseInt($('#s-thr').value,10)/100,
+      min_evidence: parseInt($('#s-ev').value,10),
+      min_constraints: parseInt($('#s-con').value,10),
+    });
+    S.state = Object.assign(S.state||{}, body);
+    S.state.model = body.settings.model;
+    $('#pill-model').textContent = body.settings.model;
+    renderLedger();
+    $('#s-status').textContent = '已生效';
+    await pollLogs();
+    toast('设置已生效 —— 下一次调用就用新模型，不需要重启。','ok');
+    setTimeout(closeSettings, 520);
+  }catch(e){
+    $('#s-status').textContent = '';
+    toast('保存失败：'+e.message,'err');
+  }finally{ btn.disabled = false; }
+}
+
+async function testModel(){
+  const btn = $('#btn-test');
+  const out = $('#s-test-out');
+  const model = $('#s-model').value.trim();
+  if(!model){ out.textContent = '先填一个模型 ID。'; return; }
+  btn.disabled = true;
+  out.className = 'hint';
+  out.textContent = '正在用 ' + model + ' 发一个最小请求…';
+  try{
+    const r = await req('POST','/api/settings/test',{model});
+    out.className = 'hint ' + (r.json_compliant ? 'test-ok' : 'test-warn');
+    out.textContent = (r.json_compliant ? '✓ ' : '⚠ ') + r.note;
+  }catch(e){
+    out.className = 'hint test-err';
+    const d = e.data || {};
+    out.textContent = '✗ ' + (d.error || e.message);
+  }finally{ btn.disabled = false; await pollLogs(); }
+}
+
 /* ---------------- boot ---------------- */
 function updCC(){
   const n = $('#input').value.length;
@@ -936,6 +1170,26 @@ $('#topic').onchange = async ()=>{
   try{ S.state = await req('POST','/api/topic',{topic:$('#topic').value}); await pollLogs(); }
   catch(e){ toast(e.message,'err'); }
 };
+$('#btn-settings').onclick = openSettings;
+$('#btn-close-settings').onclick = closeSettings;
+$('#btn-save-settings').onclick = saveSettings;
+$('#btn-test').onclick = testModel;
+$('#btn-reset-settings').onclick = ()=>{
+  $('#s-model').value = SETTINGS_META.default_model;
+  $('#s-temp').value = 0.7; $('#s-temp-val').textContent = '0.70';
+  $('#s-thr').value = 60;   $('#s-thr-val').textContent = '60%';
+  $('#s-ev').value = 2; $('#s-con').value = 1;
+  $('#s-status').textContent = '已填入默认值，点保存生效';
+  renderPresets();
+};
+$('#s-temp').oninput = e => { $('#s-temp-val').textContent = Number(e.target.value).toFixed(2); };
+$('#s-thr').oninput  = e => { $('#s-thr-val').textContent = e.target.value+'%'; };
+$('#s-model').oninput = ()=>{ renderPresets(); $('#s-test-out').textContent=''; };
+$('#modal-back').onclick = e => { if(e.target.id==='modal-back') closeSettings(); };
+document.addEventListener('keydown', e => {
+  if(e.key==='Escape' && $('#modal-back').classList.contains('open')) closeSettings();
+});
+
 $('#btn-log').onclick = ()=>{
   $('#logpanel').classList.toggle('open');
   if($('#logpanel').classList.contains('open')) renderLogs();

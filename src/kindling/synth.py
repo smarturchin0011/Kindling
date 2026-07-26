@@ -92,8 +92,12 @@ def synthesize(
     entries: list[ContextEntry],
     llm: LLMClient,
     force: bool = False,
+    gate: dict | None = None,
 ) -> list[Frame]:
-    gate = gate_status(entries)
+    # gate 由调用方传入（携带运行时阈值）；缺省时回落到模块默认，
+    # 保证纯域层测试无需设置文件。
+    if gate is None:
+        gate = gate_status(entries)
     if not gate["open"] and not force:
         log("synth", f"闸门拒绝：完整度 {gate['percent']}%", level="warn", detail=gate)
         raise GateClosed(

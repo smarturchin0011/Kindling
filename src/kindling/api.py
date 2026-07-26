@@ -11,34 +11,28 @@ from pydantic import BaseModel, Field
 
 from .completeness import GATE_THRESHOLD
 from .context import ContextEntry, EntryTooLong, EntryType
+from .credentials import (
+    InvalidKey,
+    clear_key,
+    has_key,
+    set_key,
+)
+from .credentials import status as key_status
 from .gap import Gap, detect_gap
 from .llm import API_URL, DEFAULT_MODEL, LLMClient, LLMError, OpenRouterClient, parse_json
+from .models_catalog import fetch_models
 from .moves import gap_to_move
 from .observability import clear_logs, get_logs, log
 from .reflux import reflux
-from .settings import MODEL_PRESETS, Settings, load_settings, save_settings
+from .settings import Settings, load_settings, save_settings
 from .store import MoveAlreadyOpen, Store
 from .synth import GateClosed, synthesize
 
-# API key 只从项目根的 .env 或进程环境变量读取。
-#
-# 刻意不去扫描 home 目录或其他应用的配置文件：隐式借用别处的凭据会让
-# 用户不知道自己在消费哪个账号，也让"key 没配"这个状态变得不可见。
-# 配置必须是显式的 —— 见 .env.example。
+# 只加载项目根 .env（可选，主要给 CI / 自动化用）。
+# 刻意不扫描 home 目录或其他应用的配置：隐式借用别处的凭据会让用户
+# 不知道自己在消费哪个账号。日常使用请在设置面板粘贴 key —— 只存内存，不落盘。
 _ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(_ROOT / ".env")
-
-
-def has_key() -> bool:
-    return bool(os.environ.get("OPENROUTER_API_KEY", "").strip())
-
-
-SETUP_HINT = (
-    "未配置 API key。在项目根目录创建 .env 文件，写入一行：\n"
-    "  OPENROUTER_API_KEY=sk-or-v1-你的key\n"
-    "key 在 https://openrouter.ai/keys 获取。可参考 .env.example。\n"
-    "改完 .env 需要重启服务（改模型不用）。"
-)
 
 WEB_DIR = _ROOT / "web"
 
@@ -97,12 +91,8 @@ class SettingsReq(BaseModel):
     min_constraints: int | None = None
 
 
-def _key_hint() -> str:
-    """只报告"已配置/未配置"，绝不回显 key 的任何片段。
-
-    公开项目里回显前缀+后四位没有实际价值，却泄漏了可用于关联账号的信息。
-    """
-    return "已配置（不显示）" if has_key() else ""
+class KeyReq(BaseModel):
+    api_key: str
 
 
 # ---------------- 错误处理 ----------------
@@ -129,6 +119,7 @@ def api_state():
     snap["model"] = s.model
     snap["temperature"] = s.temperature
     snap["has_key"] = has_key()
+    snap["key"] = key_status()
     return snap
 
 
@@ -352,23 +343,40 @@ def api_logs(since: int = 0):
     return {"logs": get_logs(since)}
 
 
-# ---------------- 设置（模型可手动调整） ----------------
+# ---------------- 设置 / 凭据 / 模型目录 ----------------
 
 
 @app.get("/api/settings")
 def api_get_settings():
-    s = load_settings()
     return {
-        "settings": s.to_dict(),
-        "presets": MODEL_PRESETS,
+        "settings": load_settings().to_dict(),
         "provider": "OpenRouter",
         "endpoint": API_URL,
-        "has_key": has_key(),
-        "key_hint": _key_hint(),
-        "setup_hint": "" if has_key() else SETUP_HINT,
-        "env_file": str(_ROOT / ".env"),
         "default_model": DEFAULT_MODEL,
+        "key": key_status(),
     }
+
+
+@app.post("/api/key")
+def api_set_key(req: KeyReq):
+    """存入 API key。只进内存，不写任何文件，重启即失效。"""
+    try:
+        set_key(req.api_key)
+    except InvalidKey as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"key": key_status()}
+
+
+@app.delete("/api/key")
+def api_clear_key():
+    clear_key()
+    return {"key": key_status()}
+
+
+@app.get("/api/models")
+def api_models(refresh: bool = False):
+    """OpenRouter 真实模型列表（公开端点，不需要 key）。"""
+    return fetch_models(force=refresh)
 
 
 @app.post("/api/settings")

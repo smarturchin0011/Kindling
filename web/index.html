@@ -388,6 +388,25 @@ textarea,input,select{font-family:inherit;font-size:inherit}
 .row .grow{flex:1;margin-top:0}
 .row input{flex:1}
 .preset-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.model-list{
+  max-height:min(246px,32vh);overflow-y:auto;margin-top:9px;
+  border:1px solid var(--line);border-radius:8px;background:var(--bg);
+}
+.mrow{
+  display:flex;align-items:baseline;gap:9px;padding:8px 11px;width:100%;
+  text-align:left;border-bottom:1px solid #1b1f28;transition:background .12s;
+}
+.mrow:last-child{border-bottom:none}
+.mrow:hover{background:var(--bg-3)}
+.mrow.on{background:#1f1a10;box-shadow:inset 2px 0 0 var(--acc)}
+.mstar{color:var(--acc);flex-shrink:0;font-size:10px;width:9px}
+.mname{font-size:12.5px;color:var(--fg);flex-shrink:0;max-width:190px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mid{font-family:var(--mono);font-size:9.5px;color:var(--fg-3);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.mmeta{font-family:var(--mono);font-size:9.5px;color:var(--fg-3);flex-shrink:0}
+.mnote{font-size:10px;color:var(--acc);flex-shrink:0}
+.model-empty{padding:22px;text-align:center;color:var(--fg-3);font-size:11.5px}
 .preset{
   text-align:left;background:var(--bg-3);border:1px solid var(--line);
   border-radius:8px;padding:9px 11px;transition:border-color .15s,background .15s;
@@ -436,23 +455,39 @@ textarea,input,select{font-family:inherit;font-size:inherit}
       <div class="modal-body">
 
         <div class="sect">
-          <div class="sect-title">API 提供方</div>
+          <div class="sect-title">API Key</div>
           <div class="kv"><span>Provider</span><b id="s-provider">—</b></div>
-          <div class="kv"><span>Endpoint</span><b id="s-endpoint" class="mono sm">—</b></div>
-          <div class="kv"><span>API Key</span><b id="s-key" class="mono sm">—</b></div>
+          <div class="kv"><span>状态</span><b id="s-key" class="mono sm">—</b></div>
+          <div class="field">
+            <label>粘贴你的 OpenRouter key</label>
+            <div class="row">
+              <input id="s-keyin" type="password" class="mono"
+                     placeholder="sk-or-v1-..." autocomplete="off" spellcheck="false">
+              <button class="btn sm" id="btn-savekey">存入</button>
+              <button class="btn ghost sm" id="btn-clearkey">清除</button>
+            </div>
+            <div class="hint" id="s-keyout"></div>
+          </div>
           <div class="setup-box" id="s-setup" style="display:none"></div>
-          <div class="hint">Key 只从项目根 <code>.env</code> 的
-            <code>OPENROUTER_API_KEY</code> 读取，不会去别处翻找。
-            改 key 需重启服务；改模型不用。</div>
+          <div class="hint" id="s-keyhelp">🔒 key <b>只存在内存里</b>，不写入任何文件、不进日志、
+            不出现在任何接口响应中。<b>重启服务需重新输入</b> —— 这是刻意的：
+            公开仓库里落盘的 key 迟早会被提交上去。
+            <br>在 <a href="https://openrouter.ai/keys" target="_blank"
+            rel="noopener">openrouter.ai/keys</a> 获取。</div>
         </div>
 
         <div class="sect">
           <div class="sect-title">模型</div>
-          <div class="preset-grid" id="s-presets"></div>
+          <div class="row">
+            <input id="s-search" placeholder="搜索模型（名称或 id）…">
+            <button class="btn ghost sm" id="btn-refresh-models">刷新列表</button>
+          </div>
+          <div class="hint" id="s-models-meta">加载中…</div>
+          <div class="model-list" id="s-models"></div>
           <div class="field">
-            <label>自定义模型 ID（任何 OpenRouter 模型都可以）</label>
-            <div class="row">
-              <input id="s-model" class="mono" placeholder="vendor/model-name">
+            <label>当前选定 <span class="mono sm" id="s-model-cur">—</span></label>
+            <input id="s-model" class="mono" placeholder="vendor/model-name">
+            <div class="row" style="margin-top:7px">
               <button class="btn sm" id="btn-test">测试连通</button>
             </div>
             <div class="hint" id="s-test-out"></div>
@@ -1040,39 +1075,87 @@ async function pollLogs(){
 }
 
 /* ---------------- settings ---------------- */
-let SETTINGS_META = null;
+let SETTINGS_META = null, MODELS = [];
 
-function renderPresets(){
-  const box = $('#s-presets'); box.innerHTML = '';
+function fmtPrice(p){
+  if(p === 0) return '免费';
+  if(p == null) return '';
+  return '$' + (p < 1 ? p.toFixed(2) : p.toFixed(1)) + '/M';
+}
+function fmtCtx(n){
+  if(!n) return '';
+  return n >= 1000 ? Math.round(n/1000) + 'k' : String(n);
+}
+
+function renderModels(){
+  const box = $('#s-models'); box.innerHTML = '';
+  const q = $('#s-search').value.trim().toLowerCase();
   const cur = $('#s-model').value.trim();
-  for(const p of (SETTINGS_META.presets||[])){
-    const b = el('button','preset'+(p.id===cur?' on':''));
-    b.appendChild(el('div','preset-name', p.label));
-    b.appendChild(el('div','preset-id', p.id));
-    b.appendChild(el('div','preset-note', p.note));
+  const rows = q
+    ? MODELS.filter(m => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q))
+    : MODELS;
+  if(!rows.length){
+    box.appendChild(el('div','model-empty', q ? `没有匹配「${q}」的模型` : '模型列表为空'));
+    return;
+  }
+  for(const m of rows.slice(0, 300)){
+    const b = el('button','mrow'+(m.id===cur?' on':''));
+    b.appendChild(el('span','mstar', m.recommended ? '★' : ''));
+    b.appendChild(el('span','mname', m.name));
+    b.appendChild(el('span','mid', m.id));
+    if(m.note) b.appendChild(el('span','mnote', m.note));
+    const meta = [fmtCtx(m.context), fmtPrice(m.prompt_price)].filter(Boolean).join(' · ');
+    b.appendChild(el('span','mmeta', meta));
     b.onclick = ()=>{
-      $('#s-model').value = p.id;
+      $('#s-model').value = m.id;
+      $('#s-model-cur').textContent = m.id;
       $('#s-test-out').textContent = '';
-      renderPresets();
+      renderModels();
     };
     box.appendChild(b);
   }
+  if(rows.length > 300)
+    box.appendChild(el('div','model-empty', `还有 ${rows.length-300} 个，用搜索缩小范围`));
+}
+
+async function loadModels(refresh){
+  const meta = $('#s-models-meta');
+  meta.className = 'hint';
+  meta.textContent = refresh ? '正在刷新…' : '加载中…';
+  try{
+    const r = await req('GET','/api/models' + (refresh ? '?refresh=true' : ''));
+    MODELS = r.models || [];
+    if(r.error){ meta.className = 'hint test-warn'; meta.textContent = r.error; }
+    else meta.textContent = `${r.count} 个模型${r.cached ? '（缓存）' : '（实时）'} · ★ = 推荐用于缺口检测`;
+    renderModels();
+  }catch(e){
+    meta.className = 'hint test-err';
+    meta.textContent = '拉取模型列表失败：' + e.message;
+  }
+}
+
+function paintKeyStatus(k){
+  const el_ = $('#s-key');
+  el_.textContent = k.label;
+  el_.className = 'mono sm ' + (k.has_key ? 'test-ok' : 'test-err');
+  const setup = $('#s-setup');
+  if(k.setup_hint){ setup.textContent = k.setup_hint; setup.style.display = 'block'; }
+  else setup.style.display = 'none';
+  // key 配好之后，把长篇安全说明收起来 —— 腾出空间给模型列表，
+  // 这是重复访问设置面板时（对比模型）真正需要的区域。
+  $('#s-keyhelp').style.display = k.has_key ? 'none' : 'block';
+  const pk = $('#pill-key');
+  pk.textContent = k.has_key ? 'API key ✓' : 'API key 缺失';
+  pk.className = 'pill ' + (k.has_key ? 'ok' : 'err');
 }
 
 function fillSettings(m){
   SETTINGS_META = m;
   const s = m.settings;
   $('#s-provider').textContent = m.provider;
-  $('#s-endpoint').textContent = m.endpoint;
-  const k = $('#s-key');
-  k.textContent = m.has_key ? m.key_hint : '未配置';
-  k.className = 'mono sm ' + (m.has_key ? 'test-ok' : 'test-err');
-  const setup = $('#s-setup');
-  if(m.setup_hint){
-    setup.textContent = m.setup_hint + '\n\n路径：' + (m.env_file||'');
-    setup.style.display = 'block';
-  } else setup.style.display = 'none';
+  paintKeyStatus(m.key);
   $('#s-model').value = s.model;
+  $('#s-model-cur').textContent = s.model;
   $('#s-temp').value = s.temperature;
   $('#s-temp-val').textContent = Number(s.temperature).toFixed(2);
   $('#s-thr').value = Math.round(s.gate_threshold*100);
@@ -1081,16 +1164,47 @@ function fillSettings(m){
   $('#s-con').value = s.min_constraints;
   $('#s-status').textContent = '';
   $('#s-test-out').textContent = '';
-  renderPresets();
+  $('#s-keyout').textContent = '';
+  $('#s-keyin').value = '';
 }
 
 async function openSettings(){
   try{
     fillSettings(await req('GET','/api/settings'));
     $('#modal-back').classList.add('open');
+    if(!MODELS.length) loadModels(false); else renderModels();
   }catch(e){ toast('读取设置失败：'+e.message,'err'); }
 }
 function closeSettings(){ $('#modal-back').classList.remove('open'); }
+
+async function saveKey(){
+  const inp = $('#s-keyin'), out = $('#s-keyout');
+  const v = inp.value.trim();
+  if(!v){ out.className='hint test-err'; out.textContent='先粘贴 key。'; return; }
+  $('#btn-savekey').disabled = true;
+  try{
+    const r = await req('POST','/api/key',{api_key:v});
+    inp.value = '';                       // 立刻清空输入框，不留在 DOM 里
+    paintKeyStatus(r.key);
+    out.className = 'hint test-ok';
+    out.textContent = '✓ 已存入内存。重启服务后需重新输入。';
+    await pollLogs();
+  }catch(e){
+    out.className = 'hint test-err';
+    out.textContent = '✗ ' + e.message;
+  }finally{ $('#btn-savekey').disabled = false; }
+}
+
+async function clearKey(){
+  try{
+    const r = await req('DELETE','/api/key');
+    paintKeyStatus(r.key);
+    $('#s-keyin').value = '';
+    $('#s-keyout').className = 'hint';
+    $('#s-keyout').textContent = '已从内存清除。';
+    await pollLogs();
+  }catch(e){ toast(e.message,'err'); }
+}
 
 async function saveSettings(){
   const btn = $('#btn-save-settings');
@@ -1119,10 +1233,9 @@ async function saveSettings(){
 }
 
 async function testModel(){
-  const btn = $('#btn-test');
-  const out = $('#s-test-out');
+  const btn = $('#btn-test'), out = $('#s-test-out');
   const model = $('#s-model').value.trim();
-  if(!model){ out.textContent = '先填一个模型 ID。'; return; }
+  if(!model){ out.textContent = '先选一个模型。'; return; }
   btn.disabled = true;
   out.className = 'hint';
   out.textContent = '正在用 ' + model + ' 发一个最小请求…';
@@ -1132,8 +1245,7 @@ async function testModel(){
     out.textContent = (r.json_compliant ? '✓ ' : '⚠ ') + r.note;
   }catch(e){
     out.className = 'hint test-err';
-    const d = e.data || {};
-    out.textContent = '✗ ' + (d.error || e.message);
+    out.textContent = '✗ ' + ((e.data||{}).error || e.message);
   }finally{ btn.disabled = false; await pollLogs(); }
 }
 
@@ -1152,11 +1264,20 @@ async function boot(){
     toast('后端没连上：'+e.message,'err',9000); return;
   }
   $('#pill-model').textContent = S.state.model || '—';
-  const pk = $('#pill-key');
-  pk.textContent = S.state.has_key ? 'API key ✓' : 'API key 缺失';
-  pk.className = 'pill '+(S.state.has_key?'ok':'err');
+  if(S.state.key) paintKeyStatus(S.state.key);
   $('#topic').value = S.state.topic || '';
   renderLedger();
+
+  // 每次重启都需要重新粘 key —— 直接把它作为第一件事推到用户面前，
+  // 而不是等他点了「问我一个缺口」才撞上 502。
+  if(!S.state.has_key){
+    cardSys('先配置 API key 才能开始 —— key 只存在内存里，不写任何文件，所以每次重启服务都要重新粘一次。');
+    openSettings();
+    setTimeout(()=>$('#s-keyin').focus(), 260);
+    await pollLogs();
+    setInterval(pollLogs, 2500);
+    return;
+  }
 
   if(!S.state.entries.length){
     cardSys('先扔几条想法进来 —— 不用分类，不用组织，写到哪算哪。攒够两三条之后，点「问我一个缺口」，让系统告诉你它缺什么。');
@@ -1185,17 +1306,26 @@ $('#btn-settings').onclick = openSettings;
 $('#btn-close-settings').onclick = closeSettings;
 $('#btn-save-settings').onclick = saveSettings;
 $('#btn-test').onclick = testModel;
+$('#btn-savekey').onclick = saveKey;
+$('#btn-clearkey').onclick = clearKey;
+$('#s-keyin').onkeydown = e => { if(e.key==='Enter'){ e.preventDefault(); saveKey(); } };
+$('#s-search').oninput = renderModels;
+$('#btn-refresh-models').onclick = ()=>loadModels(true);
 $('#btn-reset-settings').onclick = ()=>{
   $('#s-model').value = SETTINGS_META.default_model;
+  $('#s-model-cur').textContent = SETTINGS_META.default_model;
   $('#s-temp').value = 0.7; $('#s-temp-val').textContent = '0.70';
   $('#s-thr').value = 60;   $('#s-thr-val').textContent = '60%';
   $('#s-ev').value = 2; $('#s-con').value = 1;
   $('#s-status').textContent = '已填入默认值，点保存生效';
-  renderPresets();
+  renderModels();
 };
 $('#s-temp').oninput = e => { $('#s-temp-val').textContent = Number(e.target.value).toFixed(2); };
 $('#s-thr').oninput  = e => { $('#s-thr-val').textContent = e.target.value+'%'; };
-$('#s-model').oninput = ()=>{ renderPresets(); $('#s-test-out').textContent=''; };
+$('#s-model').oninput = ()=>{
+  $('#s-model-cur').textContent = $('#s-model').value.trim() || '—';
+  renderModels(); $('#s-test-out').textContent='';
+};
 $('#modal-back').onclick = e => { if(e.target.id==='modal-back') closeSettings(); };
 document.addEventListener('keydown', e => {
   if(e.key==='Escape' && $('#modal-back').classList.contains('open')) closeSettings();

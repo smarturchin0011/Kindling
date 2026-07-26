@@ -18,19 +18,6 @@ from .observability import log
 
 DEFAULT_MODEL = "anthropic/claude-sonnet-4.5"
 
-# 预设清单：给你一键切换的常用对比组。
-# 不是白名单 —— 自定义输入任何 OpenRouter 模型 id 都接受。
-MODEL_PRESETS: list[dict[str, str]] = [
-    {"id": "anthropic/claude-sonnet-4.5", "label": "Claude Sonnet 4.5", "note": "默认。指令遵循强，JSON 稳"},
-    {"id": "anthropic/claude-opus-4.1", "label": "Claude Opus 4.1", "note": "最强推理，缺口问题更尖锐，慢且贵"},
-    {"id": "openai/gpt-5", "label": "GPT-5", "note": "对比基线"},
-    {"id": "google/gemini-2.5-pro", "label": "Gemini 2.5 Pro", "note": "长上下文便宜"},
-    {"id": "deepseek/deepseek-chat-v3.1", "label": "DeepSeek V3.1", "note": "极便宜，中文好，适合刷轮次"},
-    {"id": "x-ai/grok-4", "label": "Grok 4", "note": "风格更直接，可能问得更冒犯"},
-    {"id": "qwen/qwen3-235b-a22b", "label": "Qwen3 235B", "note": "中文母语级"},
-    {"id": "z-ai/glm-4.6", "label": "GLM-4.6", "note": "中文强，便宜"},
-]
-
 _lock = threading.Lock()
 
 

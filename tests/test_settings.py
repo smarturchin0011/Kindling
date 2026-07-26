@@ -7,12 +7,11 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from kindling import api
+from kindling import api, credentials
 from kindling.completeness import gate_status
 from kindling.context import ContextEntry, EntryType
 from kindling.settings import (
     DEFAULT_MODEL,
-    MODEL_PRESETS,
     Settings,
     load_settings,
     save_settings,
@@ -20,15 +19,31 @@ from kindling.settings import (
 from kdfakes import FakeLLM
 from kdresponses import FRAMES
 
+GOOD_KEY = "sk-or-v1-" + "f" * 64
+
+
+@pytest.fixture(autouse=True)
+def _clean_key():
+    """每个测试从"无 key"开始，避免互相污染。"""
+    credentials.clear_key()
+    yield
+    credentials.clear_key()
+
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("KINDLING_STATE", str(tmp_path / "state.json"))
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-FAKEKEYFORTESTSONLY00")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     api.set_llm(None)
     with TestClient(api.app) as c:
         yield c
     api.set_llm(None)
+
+
+@pytest.fixture
+def keyed_client(client):
+    assert client.post("/api/key", json={"api_key": GOOD_KEY}).status_code == 200
+    return client
 
 
 @pytest.fixture
@@ -93,11 +108,13 @@ def test_negative_minimums_clamped():
     assert n.min_evidence == 0 and n.min_constraints == 0
 
 
-def test_presets_are_wellformed():
-    assert len(MODEL_PRESETS) >= 4
-    for p in MODEL_PRESETS:
-        assert {"id", "label", "note"} <= set(p)
-        assert "/" in p["id"]          # OpenRouter 形如 vendor/model
+def test_recommended_models_are_wellformed():
+    from kindling.models_catalog import RECOMMENDED
+
+    assert len(RECOMMENDED) >= 4
+    for mid, note in RECOMMENDED.items():
+        assert "/" in mid          # OpenRouter 形如 vendor/model
+        assert note.strip()
 
 
 def test_upstream_errors_scrub_account_id():
@@ -150,43 +167,182 @@ def test_lowering_requirements_opens_gate():
 # ---------- HTTP ----------
 
 
-def test_get_settings_never_echoes_key_material(client):
+def test_get_settings_never_echoes_key_material(keyed_client):
     """公开仓库：绝不回显 key 的任何片段，只报告已配置/未配置。"""
-    body = client.get("/api/settings").json()
+    body = keyed_client.get("/api/settings").json()
     assert body["provider"] == "OpenRouter"
     assert "openrouter.ai" in body["endpoint"]
     assert body["settings"]["model"]
-    assert len(body["presets"]) >= 4
-    assert body["has_key"] is True
+    assert body["key"]["has_key"] is True
+    assert body["key"]["source"] == "runtime"
+    assert body["key"]["persisted"] is False
 
     blob = json.dumps(body, ensure_ascii=False)
-    key = os.environ["OPENROUTER_API_KEY"]
-    assert key not in blob                    # 完整 key 不出现
-    assert key[:12] not in blob               # 前缀也不出现
-    assert key[-6:] not in blob               # 后缀也不出现
-    assert body["key_hint"] == "已配置（不显示）"
-    assert body["setup_hint"] == ""           # 已配置时无需提示
+    assert GOOD_KEY not in blob               # 完整 key 不出现
+    assert GOOD_KEY[:12] not in blob          # 前缀也不出现
+    assert GOOD_KEY[-8:] not in blob          # 后缀也不出现
+    assert body["key"]["setup_hint"] == ""    # 已配置时无需提示
 
 
-def test_missing_key_yields_actionable_setup_hint(client, monkeypatch):
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    body = client.get("/api/settings").json()
-    assert body["has_key"] is False
-    assert body["key_hint"] == ""
-    hint = body["setup_hint"]
-    assert ".env" in hint and "OPENROUTER_API_KEY" in hint
-    assert "openrouter.ai/keys" in hint       # 告诉用户去哪拿
-    assert body["env_file"].endswith(".env")  # 告诉用户放哪
+def test_missing_key_yields_actionable_setup_hint(client):
+    k = client.get("/api/settings").json()["key"]
+    assert k["has_key"] is False
+    assert k["source"] == "none"
+    hint = k["setup_hint"]
+    assert "设置" in hint                      # 告诉用户去哪配
+    assert "openrouter.ai/keys" in hint        # 告诉用户去哪拿
+    assert "内存" in hint                      # 说明重启失效
 
 
-def test_no_key_fails_loudly_not_silently(client, monkeypatch):
+def test_no_key_fails_loudly_not_silently(client):
     """没有 key 时必须明确报错，绝不能静默降级或借用别处凭据。"""
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     api.set_llm(None)
     client.post("/api/entries", json={"text": "想教AI产品", "type": "intent"})
     r = client.post("/api/ask")
     assert r.status_code == 502
-    assert ".env" in r.json()["error"]
+    assert "key" in r.json()["error"].lower()
+
+
+# ---------- 运行时 key：只进内存 ----------
+
+
+def test_set_key_then_available(client):
+    body = client.post("/api/key", json={"api_key": GOOD_KEY}).json()
+    assert body["key"]["has_key"] is True
+    assert body["key"]["source"] == "runtime"
+    assert credentials.get_key() == GOOD_KEY
+    assert client.get("/api/state").json()["has_key"] is True
+
+
+def test_key_never_written_to_disk(keyed_client, tmp_path):
+    """核心安全断言：key 不得出现在任何落盘文件里。"""
+    keyed_client.post("/api/settings", json={"temperature": 0.3})
+    keyed_client.post("/api/entries", json={"text": "x", "type": "intent"})
+
+    scanned = 0
+    for p in list(tmp_path.rglob("*")) + list(Path(api.__file__).resolve().parents[1].rglob("*.json")):
+        if not p.is_file():
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        scanned += 1
+        assert GOOD_KEY not in text, f"key 泄漏到 {p}"
+        assert GOOD_KEY[:20] not in text, f"key 前缀泄漏到 {p}"
+    assert scanned > 0                         # 确认真的扫到了文件
+
+
+def test_key_never_appears_in_logs(keyed_client):
+    logs = json.dumps(keyed_client.get("/api/logs").json(), ensure_ascii=False)
+    assert GOOD_KEY not in logs
+    assert GOOD_KEY[:20] not in logs
+    assert "auth" in logs                      # 但事件本身有记录
+
+
+def test_clear_key_removes_it(keyed_client):
+    body = keyed_client.delete("/api/key").json()
+    assert body["key"]["has_key"] is False
+    assert credentials.get_key() == ""
+
+
+def test_malformed_keys_rejected(client):
+    for bad in ["", "   ", "not-a-key", "sk-ant-api03-xxxx", "sk-or-v1-short"]:
+        r = client.post("/api/key", json={"api_key": bad})
+        assert r.status_code == 400, f"应拒绝: {bad!r}"
+    assert credentials.get_key() == ""
+
+
+def test_env_key_used_as_fallback(client, monkeypatch):
+    """环境变量仍支持（CI 用），但运行时输入优先。"""
+    env_key = "sk-or-v1-" + "e" * 64
+    monkeypatch.setenv("OPENROUTER_API_KEY", env_key)
+    assert client.get("/api/settings").json()["key"]["source"] == "env"
+
+    client.post("/api/key", json={"api_key": GOOD_KEY})
+    assert credentials.get_key() == GOOD_KEY   # 运行时覆盖 env
+    assert client.get("/api/settings").json()["key"]["source"] == "runtime"
+
+
+# ---------- 模型目录 ----------
+
+# 真实的 OpenRouter /models 响应形状（截取两条），用于离线测试。
+FAKE_MODELS_PAYLOAD = {
+    "data": [
+        {
+            "id": "anthropic/claude-sonnet-4.5",
+            "name": "Anthropic: Claude Sonnet 4.5",
+            "context_length": 200000,
+            "pricing": {"prompt": "0.000003", "completion": "0.000015"},
+        },
+        {
+            "id": "some-vendor/free-model",
+            "name": "Some Vendor: Free Model",
+            "context_length": 8192,
+            "pricing": {"prompt": "0", "completion": "0"},
+        },
+    ]
+}
+
+
+@pytest.fixture
+def offline_models(monkeypatch):
+    """让模型目录走假响应 —— 测试不依赖网络。"""
+    import httpx
+
+    from kindling import models_catalog
+
+    monkeypatch.setattr(models_catalog, "_cache", [])
+    monkeypatch.setattr(models_catalog, "_fetched_at", 0.0)
+    monkeypatch.setattr(
+        models_catalog.httpx,
+        "get",
+        lambda url, **k: httpx.Response(
+            200, json=FAKE_MODELS_PAYLOAD, request=httpx.Request("GET", url)
+        ),
+    )
+    return models_catalog
+
+
+def test_models_endpoint_shape(client, offline_models):
+    body = client.get("/api/models?refresh=true").json()
+    assert body["error"] == ""
+    assert body["count"] == 2
+    m = body["models"][0]
+    assert {"id", "name", "context", "prompt_price", "recommended"} <= set(m)
+    assert m["recommended"] is True             # 推荐的排最前
+    assert m["id"] == "anthropic/claude-sonnet-4.5"
+    assert m["prompt_price"] == 3.0             # 每 token 换算为每百万 token
+    assert body["models"][1]["prompt_price"] == 0.0   # 免费模型
+
+
+def test_models_endpoint_needs_no_key(client, offline_models):
+    """模型列表是公开端点 —— 没配 key 也能先浏览。"""
+    assert client.get("/api/settings").json()["key"]["has_key"] is False
+    assert client.get("/api/models?refresh=true").json()["count"] == 2
+
+
+def test_models_are_cached(client, offline_models):
+    assert client.get("/api/models?refresh=true").json()["cached"] is False
+    assert client.get("/api/models").json()["cached"] is True
+
+
+def test_models_falls_back_when_upstream_down(client, monkeypatch):
+    import httpx
+
+    from kindling import models_catalog
+
+    monkeypatch.setattr(models_catalog, "_cache", [])
+    monkeypatch.setattr(models_catalog, "_fetched_at", 0.0)
+
+    def boom(*a, **k):
+        raise httpx.ConnectError("网络不可用")
+
+    monkeypatch.setattr(models_catalog.httpx, "get", boom)
+    body = client.get("/api/models?refresh=true").json()
+    assert body["error"]                        # 明确告知降级
+    assert body["count"] >= 4                   # 但仍给出推荐清单
+    assert all(m["recommended"] for m in body["models"])
 
 
 def test_source_never_reads_credentials_outside_project(client):
@@ -202,6 +358,13 @@ def test_source_never_reads_credentials_outside_project(client):
         # 只允许加载项目根的 .env；不得把 home 目录路径喂给 load_dotenv
         for call in re.findall(r"load_dotenv\(([^)]*)\)", low):
             assert "home()" not in call, f"{py.name} 从 home 目录加载凭据: {call}"
+
+
+def test_key_never_persisted_by_design(client):
+    """credentials 模块不得包含任何写文件的操作。"""
+    src = Path(credentials.__file__).read_text(encoding="utf-8")
+    for forbidden in ("write_text", "open(", "json.dump", "Path.home"):
+        assert forbidden not in src, f"credentials.py 含落盘操作: {forbidden}"
 
 
 def test_post_settings_persists_and_returns_snapshot(client):

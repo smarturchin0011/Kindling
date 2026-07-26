@@ -21,44 +21,41 @@ uv run python -m kindling          # → http://127.0.0.1:8777
 ```
 
 ```bash
-uv run pytest tests/ -q            # 103 passed，零网络依赖
+uv run pytest tests/ -q            # 114 passed，零网络依赖（含断网校验）
+uv run python tests/_offline_check.py   # 拦截所有外部主机后重跑，证明零网络依赖
 ```
 
 ## LLM 调用与模型设置
 
 **Provider：** OpenRouter — `POST https://openrouter.ai/api/v1/chat/completions`
 
-### 配置 API key（必须手动，没有自动回退）
+### 配置 API key（在应用内手动输入，只存内存）
 
-```bash
-cp .env.example .env
-# 编辑 .env，填入你自己的 key
-```
+启动后点右上角**「设置」**，粘贴你的 OpenRouter key。
+key 在 https://openrouter.ai/keys 获取。
 
-```
-OPENROUTER_API_KEY=sk-or-v1-你的key
-```
-
-key 在 https://openrouter.ai/keys 获取。改完**重启服务**。
-
-> **只从项目根的 `.env` 或进程环境变量读取。** 刻意不去扫描 home 目录、
-> 也不读其他应用的配置文件 —— 隐式借用别处的凭据会让你不知道自己在消费
-> 哪个账号，还会让"key 没配"这个状态变得不可见。没配就明确报错，不静默降级。
+> **🔒 key 只活在进程内存里** —— 不写入任何文件、不进日志、不出现在任何接口响应中。
+> **重启服务需重新输入。** 这是刻意的：公开仓库里落盘的 key 迟早会被提交上去。
 >
-> `.env` 已在 `.gitignore` 中。**永远不要提交它。**
-> 应用只报告 key「已配置 / 未配置」，绝不回显任何片段。
+> 代码里不写死任何凭据，也不扫描 home 目录或其他应用的配置文件 ——
+> 隐式借用别处的凭据会让你不知道自己在消费哪个账号。没配就明确报错，不静默降级。
 
-### 模型（点右上角「设置」，改完立即生效，不需要重启）
+CI / 自动化可用环境变量 `OPENROUTER_API_KEY`（运行时输入优先级更高）。
+
+### 模型（点「设置」，改完立即生效，不需要重启）
+
+从 OpenRouter 拉**真实模型列表**（343+ 个），带价格与上下文长度，可搜索：
 
 | 项 | 说明 |
 |---|---|
-| 模型 | 8 个预设一键切换，或手填任何 OpenRouter 模型 id |
+| 模型列表 | 实时拉取，缓存 1 小时；★ 标记推荐用于缺口检测的模型并附理由 |
+| 搜索 | 按名称或 id 过滤 |
 | 测试连通 | 发一个最小请求，验证模型可用 **且能干净返回 JSON** |
 | Temperature | 0–2。缺口检测建议 0.3–0.8 |
 | 完整度阈值 | 默认 60%。调低更容易拿到框架 —— 但那正是「漂亮空框架」的来源 |
 | 最少证据 / 约束条数 | 闸门的结构性下限 |
 
-设置存在 `settings.json`（与 `state.json` 同目录，均已 gitignore）。
+模型/阈值等设置存在 `settings.json`（已 gitignore）。**key 不在其中。**
 
 > **为什么「测试连通」要单独验 JSON：** 换模型最大的坑是某些模型不遵守
 > "只输出 JSON"，跑到缺口检测一半才炸。这个按钮让你 5 秒内验出来。

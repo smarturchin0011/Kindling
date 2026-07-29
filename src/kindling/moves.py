@@ -21,9 +21,10 @@ class Move:
     retrieves_type: EntryType
     retrieves_why: str
     created_at: str
-    status: str = "open"      # open | done | abandoned
+    status: str = "open"      # open | done | abandoned | shelved
     artifact: str = ""
     frame_id: str = ""
+    question: str = ""        # 这个动作要回答的问题（进入回流的证据）
 
     @property
     def retrieves_label_zh(self) -> str:
@@ -47,6 +48,7 @@ class Move:
             status=d.get("status", "open"),
             artifact=d.get("artifact", ""),
             frame_id=d.get("frame_id", ""),
+            question=d.get("question", ""),
         )
 
 
@@ -66,4 +68,5 @@ def gap_to_move(gap: Gap, frame_id: str = "") -> Move:
         retrieves_why=gap.why_critical,
         created_at=now_iso(),
         frame_id=frame_id,
+        question=gap.question,
     )

@@ -158,8 +158,86 @@ def test_answer_records_typed_entry(client):
             "target_type": gap["target_type"],
         },
     ).json()
-    assert body["entry"]["type"] == "constraint"
-    assert body["entry"]["text"] == "主要是产品经理"
+    assert body["created"][0]["type"] == "constraint"
+    assert body["created"][0]["text"] == "主要是产品经理"
+
+
+def test_answer_persists_question_on_entry(client):
+    """question 必须落盘，不能只在 log 里 —— 否则账本是一堆孤立答案。"""
+    r = client.post(
+        "/api/answer",
+        json={
+            "question": "你的受众到底是谁？",
+            "answer": "主要是产品经理",
+            "target_type": "constraint",
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["created"][0]["question"] == "你的受众到底是谁？"
+
+    hit = [
+        e
+        for e in client.get("/api/state").json()["entries"]
+        if e["text"] == "主要是产品经理"
+    ][0]
+    assert hit["question"] == "你的受众到底是谁？"
+
+
+def test_answer_longer_than_280_is_accepted_and_split(client):
+    """认真回答一个尖锐问题时超长是正常的，不该被 400 惩罚。"""
+    long_answer = "答" * 300
+    r = client.post(
+        "/api/answer",
+        json={"question": "q？", "answer": long_answer, "target_type": "constraint"},
+    )
+    assert r.status_code == 200
+    created = r.json()["created"]
+    assert len(created) == 2
+    assert all(e["question"] == "q？" for e in created)
+
+
+# ---------- 纠偏通道 ----------
+
+
+def test_correct_adds_directive_without_score_change(client):
+    seed(client, [("事故1", "evidence")])
+    before = client.get("/api/state").json()["gate"]["percent"]
+    r = client.post("/api/correct", json={"text": "你误解了，我在构思不是在验证"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["entry"]["type"] == "directive"
+    assert body["entry"]["weight"] == 0.0
+    assert body["gate"]["percent"] == before, "纠偏不该改变完整度"
+
+
+def test_retype_entry_fixes_miscategorized_context(client):
+    """修正历史错类数据：实测有一条元指令被存成了 evidence 权重 5.0。"""
+    r = client.post(
+        "/api/entries",
+        json={"text": "不要再问上线后才能验证的事", "type": "evidence"},
+    )
+    eid = r.json()["entry"]["id"]
+    assert r.json()["gate"]["percent"] > 0
+
+    r = client.patch(f"/api/entries/{eid}", json={"type": "directive"})
+    assert r.status_code == 200
+    assert r.json()["gate"]["percent"] == 0
+
+    hit = [e for e in r.json()["entries"] if e["id"] == eid][0]
+    assert hit["type"] == "directive"
+
+
+def test_retype_rejects_unknown_type(client):
+    eid = client.post(
+        "/api/entries", json={"text": "随便一条", "type": "intent"}
+    ).json()["entry"]["id"]
+    assert (
+        client.patch(f"/api/entries/{eid}", json={"type": "bogus"}).status_code == 400
+    )
+
+
+def test_retype_unknown_entry_404(client):
+    assert client.patch("/api/entries/ctx_nope", json={"type": "fact"}).status_code == 404
 
 
 # ---------- 飞轮闭合 ----------

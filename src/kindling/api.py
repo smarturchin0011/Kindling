@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from .completeness import GATE_THRESHOLD
-from .context import ContextEntry, EntryTooLong, EntryType
+from .context import ContextEntry, EntryTooLong, EntryType, chunked_entries
 from .credentials import (
     InvalidKey,
     clear_key,
@@ -81,6 +81,14 @@ class TopicReq(BaseModel):
 
 class ModeReq(BaseModel):
     mode: str
+
+
+class CorrectReq(BaseModel):
+    text: str
+
+
+class RetypeReq(BaseModel):
+    type: str
 
 
 class SynthReq(BaseModel):
@@ -181,6 +189,42 @@ def api_delete_entry(entry_id: str):
     return st.snapshot()
 
 
+@app.post("/api/correct")
+def api_correct(req: CorrectReq):
+    """纠正 LLM 的理解。权重 0，不参与完整度，但在 prompt 里置顶。
+
+    存在的理由：没有这个通道时，用户只能把纠正语料堆进上下文，
+    一条元指令会被当成关于世界的知识计分（实测被存成 evidence 权重 5.0）。
+    """
+    st = load_store()
+    try:
+        e = ContextEntry.new(req.text, EntryType.DIRECTIVE)
+    except (EntryTooLong, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    st.add_entry(e)
+    st.save()
+    log("capture", f"纠偏：{e.text[:60]}")
+    return {"entry": e.to_dict(), **st.snapshot()}
+
+
+@app.patch("/api/entries/{entry_id}")
+def api_retype_entry(entry_id: str, req: RetypeReq):
+    """改一条上下文的类型。用于修正自动分类的误判和历史错类数据。"""
+    st = load_store()
+    e = next((x for x in st.entries if x.id == entry_id), None)
+    if e is None:
+        raise HTTPException(status_code=404, detail="找不到这条上下文")
+    try:
+        new_type = EntryType(req.type)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"未知类型：{req.type}")
+    old = e.type.value
+    e.type = new_type
+    st.save()
+    log("capture", f"条目 {entry_id} 类型 {old} → {new_type.value}")
+    return st.snapshot()
+
+
 @app.post("/api/ask")
 def api_ask():
     """L3 核心入口：让系统问你一个最致命的缺口。"""
@@ -219,20 +263,27 @@ def api_ask():
 
 @app.post("/api/answer")
 def api_answer(req: AnswerReq):
-    """用户直接回答一个可凭记忆回答的缺口。"""
+    """用户直接回答一个可凭记忆回答的缺口。长回答自动分块，绝不 400。
+
+    question 落盘（而不是只进 log）：否则账本上是一堆孤立答案，
+    LLM 也看不到自己当初问了什么，会重复提问。
+    """
     st = load_store()
     try:
-        e = ContextEntry.new(req.answer, EntryType(req.target_type))
-    except (EntryTooLong, ValueError) as exc:
+        created = chunked_entries(
+            req.answer, EntryType(req.target_type), question=req.question
+        )
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    st.add_entry(e)
+    for e in created:
+        st.add_entry(e)
     st.save()
     log(
         "capture",
-        f"回答已记入 [{e.type.value}]",
+        f"回答已记入 [{created[0].type.value}] × {len(created)} 条",
         detail={"question": req.question, "answer": req.answer},
     )
-    return {"entry": e.to_dict(), **st.snapshot()}
+    return {"created": [e.to_dict() for e in created], **st.snapshot()}
 
 
 @app.post("/api/done")

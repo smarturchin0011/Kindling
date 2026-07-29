@@ -468,3 +468,44 @@ def test_mode_prompt_is_injected():
     llm2 = FakeLLM([payload])
     detect_gap("t", _ctx(), llm2, mode="validate")
     assert "验证模式" in llm2.calls[0]["system"]
+
+
+# ---------- question 贯穿 gap → move → reflux ----------
+
+
+def test_move_carries_question_into_evidence():
+    """行动回流的证据必须带上它当初要回答的问题，否则账本上是孤立答案。"""
+    from kindling.gap import ActionKind
+
+    gap = Gap(
+        question="上传音色和人设差异大时系统怎么反应？",
+        target_type=EntryType.EVIDENCE,
+        answerable_from_memory=False,
+        why_critical="决定方案骨架",
+        suggested_action="写下 3 行观察",
+        est_minutes=4,
+        action_kind=ActionKind.RECALL,
+    )
+    m = gap_to_move(gap)
+    assert m.question == "上传音色和人设差异大时系统怎么反应？"
+
+    entries: list[ContextEntry] = []
+    created = reflux(m, "完全不生效，而且没有任何提示", entries)
+    assert created[0].question == "上传音色和人设差异大时系统怎么反应？"
+
+
+def test_move_question_backward_compatible():
+    from kindling.moves import Move
+
+    old = {
+        "id": "mov_x",
+        "description": "d",
+        "est_minutes": 4,
+        "retrieves_type": "evidence",
+        "retrieves_why": "w",
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "status": "done",
+        "artifact": "a",
+        "frame_id": "",
+    }
+    assert Move.from_dict(old).question == ""

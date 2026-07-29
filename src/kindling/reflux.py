@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from .context import ContextEntry, MAX_ENTRY_CHARS
+from .context import ContextEntry, chunked_entries
 from .moves import Move
 from .observability import log
 
@@ -24,16 +24,14 @@ def reflux(
     move.status = "done"
     move.artifact = text
 
-    created: list[ContextEntry] = []
-    for i in range(0, len(text), MAX_ENTRY_CHARS):
-        e = ContextEntry.new(
-            text[i : i + MAX_ENTRY_CHARS],
-            move.retrieves_type,
-            source="action",
-            move_id=move.id,
-        )
-        entries.append(e)
-        created.append(e)
+    created = chunked_entries(
+        text,
+        move.retrieves_type,
+        source="action",
+        move_id=move.id,
+        question=move.question,
+    )
+    entries.extend(created)
 
     log(
         "reflux",

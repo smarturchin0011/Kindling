@@ -600,3 +600,41 @@ def test_shelved_move_frees_slot_for_new_move(tmp_path):
     st.add_move(gap_to_move(_action_gap()))
     assert len(st.moves) == 2
     assert len(st.done_moves()) == 0, "搁置不是完成，不该算进飞轮圈数"
+
+
+# ---------- 自动分类：输入时零结构决策 ----------
+
+
+def test_classify_returns_entry_type():
+    from kindling.classify import classify_entry
+
+    llm = FakeLLM(['{"type":"constraint"}'])
+    assert classify_entry("受众只能是产品经理", llm) is EntryType.CONSTRAINT
+
+
+def test_classify_detects_directive():
+    from kindling.classify import classify_entry
+
+    llm = FakeLLM(['{"type":"directive"}'])
+    assert classify_entry("你理解错了，别再问这个", llm) is EntryType.DIRECTIVE
+
+
+def test_classify_falls_back_to_intent_not_evidence():
+    """失败必须回落到最便宜的类型，否则自动分类会变成刷分漏洞。"""
+    from kindling.classify import classify_entry
+
+    llm = FakeLLM(["这不是 JSON", "还是不是 JSON"])
+    assert classify_entry("随便一条", llm) is EntryType.INTENT
+
+
+def test_classify_never_returns_evidence_for_user_typed_text():
+    """用户手输的东西不可能是证据 —— 证据只能由行动回流产生。
+
+    否则完整度可以靠打字刷出来，闸门失效。
+    """
+    from kindling.classify import classify_entry
+
+    llm = FakeLLM(['{"type":"evidence"}'])
+    got = classify_entry("我觉得应该这样", llm)
+    assert got is not EntryType.EVIDENCE
+    assert got is EntryType.INTENT

@@ -48,6 +48,31 @@ def test_add_entry_returns_snapshot(client):
     assert body["gate"]["percent"] >= 0
 
 
+def test_add_entry_without_type_autoclassifies(client):
+    """输入时零结构决策 —— 类型是内部计价单位，不该暴露成用户决策。"""
+    use_llm(['{"type":"constraint"}'])
+    r = client.post("/api/entries", json={"text": "受众只能是产品经理"})
+    assert r.status_code == 200
+    assert r.json()["entry"]["type"] == "constraint"
+
+
+def test_add_entry_without_llm_still_works(client):
+    """没配 key 也要能录入 —— 录入不该被 LLM 可用性阻塞。"""
+    r = client.post("/api/entries", json={"text": "随便扔一个想法"})
+    assert r.status_code == 200
+    assert r.json()["entry"]["type"] == "intent"
+
+
+def test_add_entry_with_explicit_type_still_works(client):
+    r = client.post("/api/entries", json={"text": "一条约束", "type": "constraint"})
+    assert r.json()["entry"]["type"] == "constraint"
+
+
+def test_add_entry_rejects_unknown_explicit_type(client):
+    r = client.post("/api/entries", json={"text": "x", "type": "bogus"})
+    assert r.status_code == 400
+
+
 def test_add_entry_rejects_too_long(client):
     r = client.post("/api/entries", json={"text": "x" * 300, "type": "fact"})
     assert r.status_code == 400

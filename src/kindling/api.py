@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
+from .classify import FALLBACK, classify_entry
 from .completeness import GATE_THRESHOLD
 from .context import ContextEntry, EntryTooLong, EntryType, chunked_entries
 from .credentials import (
@@ -65,7 +66,7 @@ def load_store() -> Store:
 
 class AddEntryReq(BaseModel):
     text: str
-    type: str = "intent"
+    type: str | None = None
 
 
 class AnswerReq(BaseModel):
@@ -167,9 +168,27 @@ def api_mode(req: ModeReq):
 
 @app.post("/api/entries")
 def api_add_entry(req: AddEntryReq):
+    """收下一条碎片。不传 type 时自动分类 —— 输入时零结构决策。
+
+    类型是内部计价单位，不该暴露成用户决策（README 第一个硬机制）。
+    """
     st = load_store()
+
+    if req.type:
+        try:
+            etype = EntryType(req.type)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"未知类型：{req.type}")
+    else:
+        try:
+            etype = classify_entry(req.text, get_llm())
+        except LLMError:
+            # 没配 key 也要能录入 —— 录入不该被 LLM 可用性阻塞
+            etype = FALLBACK
+            log("classify", "无可用 LLM，类型回落 intent", level="warn")
+
     try:
-        e = ContextEntry.new(req.text, EntryType(req.type))
+        e = ContextEntry.new(req.text, etype)
     except EntryTooLong as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except ValueError as exc:

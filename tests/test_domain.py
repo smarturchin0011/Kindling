@@ -137,3 +137,73 @@ def test_gate_criteria_are_consistent():
     )
     assert g["open"] is True
     assert g["missing"] == []
+
+
+# ---------- 纠偏类型：元指令不该被当成世界知识计分 ----------
+
+
+def test_directive_has_zero_weight():
+    """纠偏是元层信息，不是关于世界的知识 —— 计分会污染闸门。
+
+    实测污染案例：用户的「不要再询问上线后才能验证的事」曾被存成
+    evidence 权重 5.0。
+    """
+    d = ContextEntry.new("不要再问上线后才能验证的事", EntryType.DIRECTIVE)
+    assert d.weight == 0.0
+    assert d.label_zh == "纠偏"
+    assert score([d]) == 0.0
+
+
+def test_directive_does_not_satisfy_gate():
+    g = gate_status(_e(EntryType.DIRECTIVE, 10))
+    assert g["open"] is False
+    assert any("证据" in m for m in g["missing"])
+
+
+def test_directive_renders_first_despite_zero_weight():
+    """权重最低但注意力最高 —— 计价与渲染顺序必须解耦。"""
+    out = render_context(_e(EntryType.EVIDENCE, 2) + _e(EntryType.DIRECTIVE, 1))
+    assert out.index("directive") < out.index("evidence")
+    assert "最高优先级" in out
+
+
+# ---------- Q&A 配对：条目记住自己回答的问题 ----------
+
+
+def test_entry_carries_question():
+    e = ContextEntry.new("受众是 PM", EntryType.CONSTRAINT, question="你的受众到底是谁？")
+    assert e.question == "你的受众到底是谁？"
+    assert e.to_dict()["question"] == "你的受众到底是谁？"
+    assert ContextEntry.from_dict(e.to_dict()).question == "你的受众到底是谁？"
+
+
+def test_entry_question_is_optional_and_backward_compatible():
+    """历史 state.json 里的条目没有 question 字段，不能因此崩。"""
+    old = {
+        "id": "ctx_x",
+        "text": "旧数据",
+        "type": "evidence",
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "source": "action",
+        "move_id": "mov_x",
+    }
+    assert ContextEntry.from_dict(old).question == ""
+
+
+def test_render_pairs_question_with_answer():
+    """LLM 必须看见问题-答案配对，否则它会重复提问。"""
+    e = ContextEntry.new("受众是 PM", EntryType.CONSTRAINT, question="受众是谁？")
+    out = render_context([e])
+    assert "受众是谁？" in out
+    assert "问：" in out
+
+
+def test_chunked_entries_split_and_share_question():
+    from kindling.context import MAX_ENTRY_CHARS, chunked_entries
+
+    text = "字" * (MAX_ENTRY_CHARS + 40)
+    es = chunked_entries(text, EntryType.CONSTRAINT, question="受众是谁？")
+    assert len(es) == 2
+    assert all(e.question == "受众是谁？" for e in es)
+    assert all(len(e.text) <= MAX_ENTRY_CHARS for e in es)
+    assert "".join(e.text for e in es) == text

@@ -21,6 +21,7 @@ class EntryType(str, Enum):
     EVIDENCE = "evidence"        # 由行动产生 ★ 价值最高
     UNKNOWN = "unknown"          # 显式登记的缺口
     DEBT = "debt"                # 故意的简化 + 触发条件
+    DIRECTIVE = "directive"      # 用户对 LLM 理解的纠偏。权重 0，但渲染置顶
 
 
 # 证据最贵：它是唯一不能靠"想"产生的类型。
@@ -32,6 +33,7 @@ WEIGHTS: dict[EntryType, float] = {
     EntryType.PREFERENCE: 0.5,
     EntryType.UNKNOWN: 0.0,
     EntryType.DEBT: 0.0,
+    EntryType.DIRECTIVE: 0.0,
 }
 
 TYPE_LABELS_ZH: dict[EntryType, str] = {
@@ -42,6 +44,7 @@ TYPE_LABELS_ZH: dict[EntryType, str] = {
     EntryType.PREFERENCE: "偏好",
     EntryType.UNKNOWN: "未知",
     EntryType.DEBT: "债",
+    EntryType.DIRECTIVE: "纠偏",
 }
 
 
@@ -65,6 +68,7 @@ class ContextEntry:
     created_at: str
     source: str = "user"      # user | action | file
     move_id: str = ""         # 由哪个 Move 产生（evidence 专用）
+    question: str = ""        # 这条上下文回答的是哪个问题（Q&A 配对）
 
     @classmethod
     def new(
@@ -73,6 +77,7 @@ class ContextEntry:
         type: EntryType | str,
         source: str = "user",
         move_id: str = "",
+        question: str = "",
     ) -> "ContextEntry":
         text = text.strip()
         if not text:
@@ -88,6 +93,7 @@ class ContextEntry:
             created_at=now_iso(),
             source=source,
             move_id=move_id,
+            question=question.strip(),
         )
 
     @property
@@ -111,6 +117,7 @@ class ContextEntry:
             "created_at": self.created_at,
             "source": self.source,
             "move_id": self.move_id,
+            "question": self.question,
             "weight": self.weight,
         }
 
@@ -123,6 +130,7 @@ class ContextEntry:
             created_at=d["created_at"],
             source=d.get("source", "user"),
             move_id=d.get("move_id", ""),
+            question=d.get("question", ""),
         )
 
 
@@ -132,14 +140,65 @@ RENDER_ORDER: list[EntryType] = sorted(
 )
 
 
+def _render_line(e: ContextEntry) -> str:
+    """带 question 的条目渲染成问答配对，否则 LLM 看不到自己问过什么。"""
+    if e.question:
+        return f"  - 问：{e.question}\n    答：{e.text}"
+    return f"  - {e.text}"
+
+
 def render_context(entries: list[ContextEntry]) -> str:
-    """按类型分组渲染给 LLM 看。分组是刻意的 —— 让模型看见 evidence 的稀缺。"""
+    """按类型分组渲染给 LLM 看。分组是刻意的 —— 让模型看见 evidence 的稀缺。
+
+    两个刻意的设计：
+    1. directive 特判置顶：它权重为 0（不计分），但必须最先被看到。
+       计价体系和注意力体系在这里刻意解耦。
+    2. 带 question 的条目渲染成问答配对 —— 否则 LLM 看不到自己当初
+       问了什么，会重复提问。
+    """
     if not entries:
         return "(空 —— 什么上下文都还没有)"
+
     lines: list[str] = []
+
+    directives = [e for e in entries if e.type is EntryType.DIRECTIVE]
+    if directives:
+        lines.append("[directive / 纠偏 —— 用户的纠正，最高优先级，必须遵守]")
+        lines.extend(_render_line(e) for e in directives)
+        lines.append("")
+
     for t in RENDER_ORDER:
+        if t is EntryType.DIRECTIVE:
+            continue
         group = [e for e in entries if e.type is t]
         if group:
             lines.append(f"[{t.value} / {TYPE_LABELS_ZH[t]}]")
-            lines.extend(f"  - {e.text}" for e in group)
+            lines.extend(_render_line(e) for e in group)
     return "\n".join(lines)
+
+
+def chunked_entries(
+    text: str,
+    type: EntryType | str,
+    source: str = "user",
+    move_id: str = "",
+    question: str = "",
+) -> list[ContextEntry]:
+    """把任意长度文本切成 ≤280 字的条目序列。
+
+    280 上限是对「采集」的降级承诺（防止第一步就写设计文档），
+    不是对「回答」的惩罚 —— 认真回答一个尖锐问题时超长是正常的。
+    """
+    text = text.strip()
+    if not text:
+        raise ValueError("内容不能为空")
+    return [
+        ContextEntry.new(
+            text[i : i + MAX_ENTRY_CHARS],
+            type,
+            source=source,
+            move_id=move_id,
+            question=question,
+        )
+        for i in range(0, len(text), MAX_ENTRY_CHARS)
+    ]

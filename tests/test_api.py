@@ -405,6 +405,84 @@ def test_pick_blocked_while_move_open(client):
     assert client.post(f"/api/pick/{fid}").status_code == 409
 
 
+# ---------- L7 产出层 ----------
+
+
+BRIEF = json.dumps(
+    {
+        "title": "决策简报",
+        "verdict": "选定反直觉清单方向。",
+        "rationale": "有真实事故支撑（证据：事故1）",
+        "risks": "不成体系",
+        "next_probes": ["下一步验证 A", "下一步验证 B"],
+    },
+    ensure_ascii=False,
+)
+
+
+def test_export_returns_markdown_pack(client):
+    """导出永远可用 —— 零 LLM，不依赖闸门，不依赖 key。"""
+    client.post("/api/topic", json={"topic": "测试议题"})
+    r = client.get("/api/export")
+    assert r.status_code == 200
+    assert "text/markdown" in r.headers["content-type"]
+    assert "测试议题" in r.text
+    assert "使用要求" in r.text
+
+
+def test_export_carries_qa_pairs(client):
+    client.post(
+        "/api/answer",
+        json={"question": "受众是谁？", "answer": "主要是PM", "target_type": "constraint"},
+    )
+    text = client.get("/api/export").text
+    assert "受众是谁？" in text
+    assert "主要是PM" in text
+
+
+def test_brief_blocked_when_gate_closed(client):
+    """闸门未开时不产出简报 —— 那只会是漂亮空话（麻醉剂 2.0）。"""
+    seed(client, [("想教AI产品", "intent")])
+    r = client.post("/api/brief")
+    assert r.status_code == 423
+    assert "闸门" in r.json()["error"] or "完整度" in r.json()["error"]
+
+
+def test_brief_blocked_without_picked_frame(client):
+    """简报是「决定的记录」，没有决定就没有简报。"""
+    seed(client, [("事故1", "evidence"), ("事故2", "evidence"), ("受众PM", "constraint")])
+    r = client.post("/api/brief")
+    assert r.status_code == 423
+    assert "框架" in r.json()["error"]
+
+
+def test_brief_endpoint_persists_result(client):
+    seed(client, [("事故1", "evidence"), ("事故2", "evidence"), ("受众PM", "constraint")])
+    use_llm([FRAMES, ACTION_GAP, BRIEF])
+    fid = client.post("/api/synth", json={"force": False}).json()["frames"][0]["id"]
+    client.post(f"/api/pick/{fid}")
+
+    r = client.post("/api/brief")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["brief"]["verdict"] == "选定反直觉清单方向。"
+    assert "markdown" in body
+    assert "决策简报" in body["markdown"]
+    assert "证据清单" in body["markdown"], "简报必须带确定性附录"
+
+    # 刷新后简报还在
+    assert client.get("/api/state").json()["brief"] is not None
+
+
+def test_reset_clears_brief(client):
+    seed(client, [("事故1", "evidence"), ("事故2", "evidence"), ("受众PM", "constraint")])
+    use_llm([FRAMES, ACTION_GAP, BRIEF])
+    fid = client.post("/api/synth", json={"force": False}).json()["frames"][0]["id"]
+    client.post(f"/api/pick/{fid}")
+    client.post("/api/brief")
+    assert client.post("/api/reset").json()["brief"] is None
+
+
 # ---------- 可观测性 ----------
 
 

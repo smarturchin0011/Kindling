@@ -49,6 +49,7 @@ class Store:
         self.entries: list[ContextEntry] = []
         self.moves: list[Move] = []
         self.frames: list[Frame] = []
+        self.brief: dict | None = None
 
     # ---------- 持久化 ----------
 
@@ -65,6 +66,7 @@ class Store:
         self.entries = [ContextEntry.from_dict(x) for x in d.get("entries", [])]
         self.moves = [Move.from_dict(x) for x in d.get("moves", [])]
         self.frames = [Frame.from_dict(x) for x in d.get("frames", [])]
+        self.brief = d.get("brief")
         expire_stale_frames(self.frames)
         return self
 
@@ -80,6 +82,7 @@ class Store:
                         "entries": [e.to_dict() for e in self.entries],
                         "moves": [m.to_dict() for m in self.moves],
                         "frames": [f.to_dict() for f in self.frames],
+                        "brief": self.brief,
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -153,6 +156,7 @@ class Store:
                 e.to_dict() for e in self.entries if e.type is EntryType.UNKNOWN
             ],
             "cycles": len(self.done_moves()),
+            "brief": self.brief,
             "state_file": str(self.path),
         }
 
@@ -160,4 +164,5 @@ class Store:
         self.entries.clear()
         self.moves.clear()
         self.frames.clear()
+        self.brief = None
         log("store", "状态已清空")

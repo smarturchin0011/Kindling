@@ -6,7 +6,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from .completeness import GATE_THRESHOLD
@@ -18,7 +18,9 @@ from .credentials import (
     set_key,
 )
 from .credentials import status as key_status
+from .export import export_pack
 from .gap import ActionKind, Gap, detect_gap
+from .harvest import BriefBlocked, check_brief_gates, compose_brief, render_brief
 from .llm import API_URL, DEFAULT_MODEL, LLMClient, LLMError, OpenRouterClient, parse_json
 from .models_catalog import fetch_models
 from .moves import gap_to_move
@@ -442,6 +444,52 @@ def api_pick(frame_id: str):
 @app.get("/api/logs")
 def api_logs(since: int = 0):
     return {"logs": get_logs(since)}
+
+
+# ---------------- L7 产出层 ----------------
+
+
+@app.get("/api/export")
+def api_export():
+    """导出上下文包。确定性、零 LLM、任何时候都可用。
+
+    这是产品的最终产出物之一：账本是资产，这个包是交付物。
+    可以直接粘给任何 LLM，让它的回答「只对你成立」。
+    """
+    st = load_store()
+    pack = export_pack(st)
+    log("harvest", f"导出上下文包（{len(pack)} 字符）")
+    return PlainTextResponse(
+        pack,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="kindling-pack.md"'},
+    )
+
+
+@app.post("/api/brief")
+def api_brief():
+    """L7：把这一轮收束成决策简报。双闸：闸门开 + 已选框架。
+
+    刻意在取 LLM 之前先查双闸：否则没配 key 时会返回 502，
+    把「你还缺什么」这个有用的信息盖掉。
+    """
+    st = load_store()
+    try:
+        check_brief_gates(st)
+        brief = compose_brief(st, get_llm())
+    except BriefBlocked as exc:
+        return JSONResponse(
+            status_code=423, content={"error": str(exc), "kind": "brief"}
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    st.brief = brief
+    st.save()
+    return {
+        "brief": brief,
+        "markdown": render_brief(brief, st),
+        **st.snapshot(),
+    }
 
 
 # ---------------- 设置 / 凭据 / 模型目录 ----------------

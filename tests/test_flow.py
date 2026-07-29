@@ -536,3 +536,67 @@ def test_move_question_backward_compatible():
         "frame_id": "",
     }
     assert Move.from_dict(old).question == ""
+
+
+# ---------- 搁置：单 Move 硬锁的泄压阀 ----------
+
+
+def test_shelve_move_unblocks_and_registers_unknown(tmp_path):
+    """实测缺陷：外部实验 Move 把用户锁在产品外 6 小时。
+
+    搁置 = 状态转 shelved + 问题转为 UNKNOWN 条目（权重 0）。
+    问题被记住（未决清单），但不再挡路。
+    """
+    from kindling.moves import Move
+    from kindling.shelve import shelve_move
+
+    st = Store(tmp_path / "s.json")
+    m = Move(
+        id="mov_x",
+        description="去跑一遍线上流程",
+        est_minutes=5,
+        retrieves_type=EntryType.EVIDENCE,
+        retrieves_why="w",
+        created_at="2026-01-01T00:00:00+00:00",
+        question="系统对失败组合怎么反应？",
+    )
+    st.moves.append(m)
+    assert st.open_move() is not None
+
+    entry = shelve_move(m, st.entries)
+
+    assert m.status == "shelved"
+    assert st.open_move() is None, "搁置后必须解除硬锁"
+    assert entry.type is EntryType.UNKNOWN
+    assert entry.weight == 0.0, "未决问题不能计分"
+    assert entry.question == "系统对失败组合怎么反应？"
+    assert entry.move_id == "mov_x"
+
+
+def test_shelve_requires_open_move():
+    from kindling.moves import Move
+    from kindling.shelve import shelve_move
+
+    m = Move(
+        id="mov_y",
+        description="d",
+        est_minutes=5,
+        retrieves_type=EntryType.EVIDENCE,
+        retrieves_why="w",
+        created_at="2026-01-01T00:00:00+00:00",
+        status="done",
+    )
+    with pytest.raises(RuntimeError):
+        shelve_move(m, [])
+
+
+def test_shelved_move_frees_slot_for_new_move(tmp_path):
+    """搁置后必须能加新 Move —— 这才是泄压阀的意义。"""
+    from kindling.shelve import shelve_move
+
+    st = Store(tmp_path / "s.json")
+    m = st.add_move(gap_to_move(_action_gap()))
+    shelve_move(m, st.entries)
+    st.add_move(gap_to_move(_action_gap()))
+    assert len(st.moves) == 2
+    assert len(st.done_moves()) == 0, "搁置不是完成，不该算进飞轮圈数"

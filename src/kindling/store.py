@@ -11,7 +11,7 @@ import threading
 from pathlib import Path
 
 from .completeness import gate_status
-from .context import ContextEntry
+from .context import ContextEntry, EntryType
 from .moves import Move
 from .observability import log
 from .synth import Frame, expire_stale_frames
@@ -147,6 +147,11 @@ class Store:
                 self.picked_frame().to_dict() if self.picked_frame() else None
             ),
             "done_moves": [m.to_dict() for m in self.done_moves()],
+            # 未决问题：搁置的动作 + 显式登记的缺口。权重 0，不计分，
+            # 但对下游 LLM 是高价值信息（告诉它哪里不能擅自填补）。
+            "open_questions": [
+                e.to_dict() for e in self.entries if e.type is EntryType.UNKNOWN
+            ],
             "cycles": len(self.done_moves()),
             "state_file": str(self.path),
         }

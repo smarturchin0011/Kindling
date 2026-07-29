@@ -25,6 +25,7 @@ from .moves import gap_to_move
 from .observability import clear_logs, get_logs, log
 from .reflux import reflux
 from .settings import Settings, load_settings, save_settings
+from .shelve import shelve_move
 from .store import VALID_MODES, MoveAlreadyOpen, Store
 from .synth import GateClosed, synthesize
 
@@ -323,6 +324,23 @@ def api_drop():
     st.save()
     log("narrow", f"放弃动作：{m.description}")
     return st.snapshot()
+
+
+@app.post("/api/shelve")
+def api_shelve():
+    """搁置当前动作：现在做不了，但问题要留着。
+
+    与 drop（放弃）的区别：drop 是"这问题不重要"，shelve 是"这问题重要
+    但现在做不了"。存在的理由：单 Move 硬锁 + 外部实验会把用户物理锁在
+    产品外面（实测 6 小时断档）。
+    """
+    st = load_store()
+    m = st.open_move()
+    if m is None:
+        raise HTTPException(status_code=409, detail="没有进行中的动作。")
+    entry = shelve_move(m, st.entries)
+    st.save()
+    return {"shelved": entry.to_dict(), **st.snapshot()}
 
 
 @app.post("/api/synth")

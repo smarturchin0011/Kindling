@@ -279,6 +279,39 @@ def test_drop_frees_the_slot(client):
     assert client.post("/api/ask").json()["move"] is not None
 
 
+# ---------- 搁置：现在做不了，但问题要留着 ----------
+
+
+def test_shelve_endpoint_unblocks_ask(client):
+    """实测缺陷：外部实验 Move 把用户锁在产品外 6 小时。"""
+    seed(client, [("想教AI产品", "intent")])
+    use_llm([ACTION_GAP, ACTION_GAP])
+    client.post("/api/ask")
+
+    r = client.post("/api/shelve")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["open_move"] is None
+    assert any(e["type"] == "unknown" for e in body["entries"])
+    assert body["open_questions"], "snapshot 必须携带未决清单"
+    assert body["cycles"] == 0, "搁置不算飞轮圈数"
+
+    # 搁置后立刻可以继续
+    assert client.post("/api/ask").json()["move"] is not None
+
+
+def test_shelve_does_not_change_completeness(client):
+    seed(client, [("事故1", "evidence")])
+    use_llm([ACTION_GAP])
+    client.post("/api/ask")
+    before = client.get("/api/state").json()["gate"]["percent"]
+    assert client.post("/api/shelve").json()["gate"]["percent"] == before
+
+
+def test_shelve_without_open_move_409(client):
+    assert client.post("/api/shelve").status_code == 409
+
+
 # ---------- 闸门 ----------
 
 

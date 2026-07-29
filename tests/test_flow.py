@@ -389,3 +389,82 @@ def test_action_kind_defaults_to_recall():
         why_critical="w",
     )
     assert g.action_kind is ActionKind.RECALL
+
+
+def test_explore_mode_rejects_external_action():
+    """构思阶段最严重的产品缺陷：功能还没上线，却被要求去跑一遍验证。
+
+    explore 模式下 external 动作必须被降级，而不是生成一个做不到的 Move。
+    """
+    llm = FakeLLM([json.dumps({
+        "question": "拿一个失败组合走一遍完整流程，记录 agent 有没有报错",
+        "target_type": "evidence",
+        "answerable_from_memory": False,
+        "why_critical": "决定方案骨架",
+        "suggested_action": "去跑一遍线上流程并记录系统反应",
+        "est_minutes": 5,
+        "action_kind": "external",
+    }, ensure_ascii=False)])
+
+    gap = detect_gap("测试议题", _ctx(), llm, mode="explore")
+    assert gap.answerable_from_memory is True, "explore 模式不该产出外部依赖的 Move"
+    assert gap.suggested_action == ""
+    assert gap.est_minutes == 0
+
+
+def test_validate_mode_keeps_external_action():
+    """验证模式下 external 是合法的 —— 那才是真的要去做实验。"""
+    from kindling.gap import ActionKind
+
+    llm = FakeLLM([json.dumps({
+        "question": "跑一次真实调用，结果如何？",
+        "target_type": "evidence",
+        "answerable_from_memory": False,
+        "why_critical": "没跑过就是空中楼阁",
+        "suggested_action": "调用一次并把结果写成 3 行",
+        "est_minutes": 5,
+        "action_kind": "external",
+    }, ensure_ascii=False)])
+
+    gap = detect_gap("测试议题", _ctx(), llm, mode="validate")
+    assert gap.answerable_from_memory is False
+    assert gap.action_kind is ActionKind.EXTERNAL
+    assert gap.suggested_action != ""
+
+
+def test_explore_mode_keeps_internal_action():
+    """explore 模式并非禁止一切动作 —— 认知动作（回忆/判断/书写）必须保留。"""
+    from kindling.gap import ActionKind
+
+    llm = FakeLLM([json.dumps({
+        "question": "你过去见过的最接近这个场景的一次失败是什么？",
+        "target_type": "evidence",
+        "answerable_from_memory": False,
+        "why_critical": "需要一个具体事例而不是抽象判断",
+        "suggested_action": "写下那一次的具体经过，3 行",
+        "est_minutes": 4,
+        "action_kind": "recall",
+    }, ensure_ascii=False)])
+
+    gap = detect_gap("测试议题", _ctx(), llm, mode="explore")
+    assert gap.answerable_from_memory is False
+    assert gap.action_kind is ActionKind.RECALL
+    assert gap.suggested_action != ""
+
+
+def test_mode_prompt_is_injected():
+    """模式必须真的进到 system prompt 里，否则约束只有后端一半。"""
+    payload = json.dumps({
+        "question": "q", "target_type": "fact",
+        "answerable_from_memory": True, "why_critical": "w",
+        "suggested_action": "", "est_minutes": 0, "action_kind": "recall",
+    }, ensure_ascii=False)
+
+    llm = FakeLLM([payload])
+    detect_gap("t", _ctx(), llm, mode="explore")
+    assert "构思模式" in llm.calls[0]["system"]
+    assert "绝对禁止" in llm.calls[0]["system"]
+
+    llm2 = FakeLLM([payload])
+    detect_gap("t", _ctx(), llm2, mode="validate")
+    assert "验证模式" in llm2.calls[0]["system"]

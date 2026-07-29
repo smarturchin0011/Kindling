@@ -19,6 +19,9 @@ from .synth import Frame, expire_stale_frames
 DEFAULT_PATH = Path.home() / ".kindling" / "state.json"
 _write_lock = threading.Lock()
 
+# 议题模式。explore=构思(方案还不存在) / validate=验证(已可运行)
+VALID_MODES = ("explore", "validate")
+
 
 class MoveAlreadyOpen(RuntimeError):
     def __init__(self, current: Move):
@@ -34,9 +37,15 @@ def state_path() -> Path:
 
 
 class Store:
-    def __init__(self, path: Path | str | None = None, topic: str = ""):
+    def __init__(
+        self,
+        path: Path | str | None = None,
+        topic: str = "",
+        mode: str = "explore",
+    ):
         self.path = Path(path) if path else state_path()
         self.topic = topic
+        self.mode = mode
         self.entries: list[ContextEntry] = []
         self.moves: list[Move] = []
         self.frames: list[Frame] = []
@@ -52,6 +61,7 @@ class Store:
             log("store", f"状态文件损坏，从空开始: {e}", level="error")
             return self
         self.topic = d.get("topic", "")
+        self.mode = d.get("mode", "explore")
         self.entries = [ContextEntry.from_dict(x) for x in d.get("entries", [])]
         self.moves = [Move.from_dict(x) for x in d.get("moves", [])]
         self.frames = [Frame.from_dict(x) for x in d.get("frames", [])]
@@ -66,6 +76,7 @@ class Store:
                 json.dumps(
                     {
                         "topic": self.topic,
+                        "mode": self.mode,
                         "entries": [e.to_dict() for e in self.entries],
                         "moves": [m.to_dict() for m in self.moves],
                         "frames": [f.to_dict() for f in self.frames],
@@ -127,6 +138,7 @@ class Store:
         om = self.open_move()
         return {
             "topic": self.topic,
+            "mode": self.mode,
             "gate": self.completeness(),
             "entries": [e.to_dict() for e in self.entries],
             "open_move": om.to_dict() if om else None,

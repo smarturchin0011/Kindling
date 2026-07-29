@@ -69,6 +69,45 @@ def test_topic_persists(client):
     assert client.get("/api/state").json()["topic"] == "如何教AI产品"
 
 
+# ---------- 议题模式 ----------
+
+
+def test_mode_defaults_to_explore_and_can_switch(client):
+    r = client.get("/api/state")
+    assert r.status_code == 200
+    assert r.json()["mode"] == "explore"
+
+    r = client.post("/api/mode", json={"mode": "validate"})
+    assert r.status_code == 200
+    assert r.json()["mode"] == "validate"
+
+    assert client.get("/api/state").json()["mode"] == "validate"
+
+
+def test_mode_rejects_unknown_value(client):
+    r = client.post("/api/mode", json={"mode": "nonsense"})
+    assert r.status_code == 400
+
+
+def test_ask_in_explore_mode_degrades_external_action(client):
+    """端到端：构思模式下 LLM 要求跑实验，必须降级为追问，不生成 Move。"""
+    seed(client, [("我想梳理一个还没上线的功能方案", "intent")])
+    use_llm([json.dumps({
+        "question": "去跑一遍线上流程，记录系统反应",
+        "target_type": "evidence",
+        "answerable_from_memory": False,
+        "why_critical": "决定方案骨架",
+        "suggested_action": "跑一遍完整流程并记录",
+        "est_minutes": 5,
+        "action_kind": "external",
+    }, ensure_ascii=False)])
+
+    body = client.post("/api/ask").json()
+    assert body["gap"]["answerable_from_memory"] is True
+    assert "move" not in body
+    assert body["open_move"] is None, "构思阶段不该被外部实验锁住"
+
+
 # ---------- ask：两条分支 ----------
 
 

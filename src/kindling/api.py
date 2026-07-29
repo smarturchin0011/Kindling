@@ -18,14 +18,14 @@ from .credentials import (
     set_key,
 )
 from .credentials import status as key_status
-from .gap import Gap, detect_gap
+from .gap import ActionKind, Gap, detect_gap
 from .llm import API_URL, DEFAULT_MODEL, LLMClient, LLMError, OpenRouterClient, parse_json
 from .models_catalog import fetch_models
 from .moves import gap_to_move
 from .observability import clear_logs, get_logs, log
 from .reflux import reflux
 from .settings import Settings, load_settings, save_settings
-from .store import MoveAlreadyOpen, Store
+from .store import VALID_MODES, MoveAlreadyOpen, Store
 from .synth import GateClosed, synthesize
 
 # 只加载项目根 .env（可选，主要给 CI / 自动化用）。
@@ -77,6 +77,10 @@ class DoneReq(BaseModel):
 
 class TopicReq(BaseModel):
     topic: str = Field(default="", max_length=200)
+
+
+class ModeReq(BaseModel):
+    mode: str
 
 
 class SynthReq(BaseModel):
@@ -132,6 +136,24 @@ def api_topic(req: TopicReq):
     return st.snapshot()
 
 
+@app.post("/api/mode")
+def api_mode(req: ModeReq):
+    """切换议题模式。explore=构思(默认) / validate=验证。
+
+    存在的理由：构思阶段的议题不该被要求去验证一个还不存在的东西。
+    """
+    m = req.mode.strip()
+    if m not in VALID_MODES:
+        raise HTTPException(
+            status_code=400, detail=f"模式只能是 {' / '.join(VALID_MODES)}"
+        )
+    st = load_store()
+    st.mode = m
+    st.save()
+    log("capture", f"议题模式切换为：{m}")
+    return st.snapshot()
+
+
 @app.post("/api/entries")
 def api_add_entry(req: AddEntryReq):
     st = load_store()
@@ -178,7 +200,9 @@ def api_ask():
     if picked:
         topic = f"{topic} / 已选框架「{picked.name}」：{picked.thesis}"
 
-    gap = detect_gap(topic, st.entries, get_llm(), gate=st.completeness())
+    gap = detect_gap(
+        topic, st.entries, get_llm(), gate=st.completeness(), mode=st.mode
+    )
 
     payload: dict = {"gap": gap.to_dict()}
     if not gap.answerable_from_memory:
@@ -312,7 +336,14 @@ def api_pick(frame_id: str):
             "用户刚刚选定了这个框架。现在必须给出一个需要动手做的动作"
             "（answerable_from_memory 必须为 false），让他立刻产出这个框架下的"
             "第一块真实内容。不要再问他能凭记忆回答的问题。"
+            + (
+                "注意：当前是构思模式，这个动作只能是 write / judge / recall，"
+                "绝不能要求他去跑系统或等上线。"
+                if st.mode == "explore"
+                else ""
+            )
         ),
+        mode=st.mode,
     )
 
     # 硬保证：选完框架必须落到一个动作上
@@ -325,6 +356,7 @@ def api_pick(frame_id: str):
             why_critical=gap.why_critical or "选定框架后必须立刻产出第一块真实内容",
             suggested_action=f"用 3-5 句话写下你对这个问题的答案：{gap.question}",
             est_minutes=4,
+            action_kind=ActionKind.WRITE,
         )
 
     move = gap_to_move(gap, frame_id=frame_id)

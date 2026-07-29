@@ -207,3 +207,35 @@ def test_chunked_entries_split_and_share_question():
     assert all(e.question == "受众是谁？" for e in es)
     assert all(len(e.text) <= MAX_ENTRY_CHARS for e in es)
     assert "".join(e.text for e in es) == text
+
+
+# ---------- 收敛信号：够了要有人说一声 ----------
+
+
+def test_gate_reports_saturation():
+    """实测缺陷：完整度打到 100% 后仍被连续追问 5 轮，每轮零增益。
+
+    score 是 min(total/SATURATION, 1.0)，封顶即信号丢失。
+    """
+    g = gate_status(_e(EntryType.EVIDENCE, 6) + _e(EntryType.CONSTRAINT, 2))
+    assert g["score"] == 1.0
+    assert g["open"] is True
+    assert g["saturated"] is True
+
+
+def test_gate_not_saturated_when_below_ceiling():
+    from kindling.completeness import MIN_CONSTRAINTS, MIN_EVIDENCE
+
+    g = gate_status(
+        _e(EntryType.EVIDENCE, MIN_EVIDENCE) + _e(EntryType.CONSTRAINT, MIN_CONSTRAINTS)
+    )
+    assert g["open"] is True
+    assert g["saturated"] is False
+
+
+def test_saturated_is_false_when_gate_closed():
+    """分数封顶但结构不满足时不算饱和 —— 还差东西就不该说够了。"""
+    g = gate_status(_e(EntryType.CONSTRAINT, 10))
+    assert g["score"] == 1.0
+    assert g["open"] is False
+    assert g["saturated"] is False

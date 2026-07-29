@@ -396,8 +396,9 @@ def test_logs_since_cursor_is_incremental(client):
 
 
 def test_llm_error_surfaces_as_502(client):
+    """两次都给坏 JSON（complete_json 会带纠错提示重试一次）才算真失败。"""
     seed(client, [("想教AI产品", "intent")])
-    use_llm(["这不是 JSON"])
+    use_llm(["这不是 JSON", "这依然不是 JSON"])
     r = client.post("/api/ask")
     assert r.status_code == 502
     assert r.json()["kind"] == "llm"

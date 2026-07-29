@@ -57,6 +57,33 @@ def test_parse_json_raises_on_garbage():
         parse_json("完全不是 JSON 的一段话")
 
 
+def test_complete_json_retries_once_on_bad_json():
+    """实测崩溃：模型在 JSON 字符串内写了中文直引号，兜底正则抓到的仍是坏 JSON。
+
+    修复策略是 prompt 层 + 一次带纠错提示的重试，不做正则修补
+    （正则修补会引入静默的错误解析）。
+    """
+    from kindling.llm import complete_json
+
+    bad = '{"question":"那些"不生效"的案例","target_type":"fact"}'
+    good = '{"question":"那些「不生效」的案例","target_type":"fact"}'
+    llm = FakeLLM([bad, good])
+
+    out = complete_json(llm, system="s", user="u", stage="gap")
+    assert out["question"] == "那些「不生效」的案例"
+    assert len(llm.calls) == 2
+    assert "不要使用双引号" in llm.calls[1]["user"]
+
+
+def test_complete_json_raises_after_second_failure():
+    from kindling.llm import complete_json
+
+    llm = FakeLLM(["还是不是 JSON", "依然不是 JSON"])
+    with pytest.raises(LLMError):
+        complete_json(llm, system="s", user="u", stage="gap")
+    assert len(llm.calls) == 2
+
+
 # ---------- 缺口检测 ----------
 
 

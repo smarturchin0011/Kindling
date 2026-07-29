@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 from .completeness import gate_status
 from .context import ContextEntry, new_id, now_iso, render_context
-from .llm import LLMClient, parse_json
+from .llm import LLMClient, complete_json
 from .observability import log
 
 DEFAULT_TTL_HOURS = 72
@@ -120,8 +120,7 @@ def synthesize(
         + f"\n\n分组视图：\n{render_context(entries)}\n\n生成 2-3 个竞争框架。"
     )
 
-    raw = llm.complete(system=SYSTEM, user=user, stage="synth")
-    payload = parse_json(raw, stage="synth")
+    payload = complete_json(llm, system=SYSTEM, user=user, stage="synth")
     specs = payload.get("frames", [])
 
     if len(specs) < 2:

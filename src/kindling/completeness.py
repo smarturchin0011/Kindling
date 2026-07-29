@@ -72,6 +72,10 @@ def gate_status(
         "threshold": thr,
         "counts": {k.value: v for k, v in c.items()},
         "total_entries": len(entries),
+        # 分数已封顶且闸门已开 —— 继续追问不会再有增益。
+        # UI 应把主行动引导到「生成框架」而不是「再问一个缺口」。
+        # 实测缺陷：打到 100% 后仍被连问 5 轮，用户只能手动喊停。
+        "saturated": (not missing) and s >= 1.0,
     }
 
 

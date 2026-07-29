@@ -9,7 +9,7 @@ from dataclasses import dataclass, asdict
 from enum import Enum
 
 from .context import ContextEntry, EntryType, render_context
-from .llm import LLMClient, parse_json
+from .llm import LLMClient, complete_json
 from .observability import log
 
 SYSTEM_BASE = """你是一个上下文缺口检测器。你服务的用户擅长宏观思考，
@@ -140,8 +140,7 @@ def detect_gap(
     user += "\n找出最致命的那一个缺口。"
 
     system = SYSTEM_BASE + MODE_PROMPTS.get(mode, MODE_EXPLORE)
-    raw = llm.complete(system=system, user=user, stage="gap")
-    spec = parse_json(raw, stage="gap")
+    spec = complete_json(llm, system=system, user=user, stage="gap")
 
     answerable = bool(spec.get("answerable_from_memory", True))
     action = str(spec.get("suggested_action") or "").strip()

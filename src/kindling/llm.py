@@ -150,3 +150,27 @@ class OpenRouterClient:
             duration_ms=t.ms,
         )
         return content
+
+
+RETRY_HINT = (
+    "\n\n【上一次你的输出不是合法 JSON】"
+    "请只输出 JSON，不要任何解释文字。"
+    "JSON 字符串内部不要使用双引号 —— 需要强调或引用时用「」。"
+)
+
+
+def complete_json(llm: LLMClient, system: str, user: str, stage: str = "llm") -> dict:
+    """调用 LLM 并解析 JSON。失败时带纠错提示重试一次。
+
+    为什么不用正则修补坏 JSON：那会静默地解析出错误结构，比明确失败更危险。
+    实测崩溃场景：模型在 JSON 字符串内写中文直引号（那些"不生效"的案例），
+    llm.py 的兜底正则抓到的仍是同一段坏 JSON，必然二次失败。
+    改为 prompt 层纠正 + 一次重试。
+    """
+    raw = llm.complete(system=system, user=user, stage=stage)
+    try:
+        return parse_json(raw, stage=stage)
+    except LLMError:
+        log(stage, "JSON 解析失败，带纠错提示重试一次", level="warn")
+        raw2 = llm.complete(system=system, user=user + RETRY_HINT, stage=stage)
+        return parse_json(raw2, stage=stage)

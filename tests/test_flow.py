@@ -357,3 +357,35 @@ def test_snapshot_shape(tmp_path):
     for key in ("gate", "entries", "open_move", "candidate_frames", "cycles"):
         assert key in snap
     assert snap["gate"]["open"] is False
+
+
+# ---------- 议题模式：构思阶段不该被逼做实验 ----------
+
+
+def test_gap_carries_action_kind():
+    """动作性质必须是结构化字段，后端才能确定性地约束它。"""
+    from kindling.gap import ActionKind
+
+    g = Gap(
+        question="q",
+        target_type=EntryType.EVIDENCE,
+        answerable_from_memory=False,
+        why_critical="w",
+        suggested_action="a",
+        est_minutes=4,
+        action_kind=ActionKind.EXTERNAL,
+    )
+    assert g.action_kind is ActionKind.EXTERNAL
+    assert g.to_dict()["action_kind"] == "external"
+
+
+def test_action_kind_defaults_to_recall():
+    from kindling.gap import ActionKind
+
+    g = Gap(
+        question="q",
+        target_type=EntryType.FACT,
+        answerable_from_memory=True,
+        why_critical="w",
+    )
+    assert g.action_kind is ActionKind.RECALL

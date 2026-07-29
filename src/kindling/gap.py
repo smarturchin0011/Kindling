@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
+from enum import Enum
 
 from .context import ContextEntry, EntryType, render_context
 from .llm import LLMClient, parse_json
@@ -38,6 +39,25 @@ SYSTEM = """你是一个上下文缺口检测器。你服务的用户擅长宏�
  "answerable_from_memory":true,"why_critical":"",
  "suggested_action":"","est_minutes":4}"""
 
+
+class ActionKind(str, Enum):
+    """动作性质。决定 explore 模式下这个动作是否可被接受。
+
+    recall  — 回忆一个已经发生过的具体事例（向内挖证据）
+    judge   — 做一次取舍/判断/排序，产出一句结论
+    write   — 把模糊表述写成具体的文字（文案、清单、反例）
+    external— 需要外部世界配合：调接口、跑系统、问别人、等上线
+    """
+
+    RECALL = "recall"
+    JUDGE = "judge"
+    WRITE = "write"
+    EXTERNAL = "external"
+
+
+# explore（构思）模式下允许的动作性质 —— 全部不依赖外部世界
+INTERNAL_KINDS = frozenset({ActionKind.RECALL, ActionKind.JUDGE, ActionKind.WRITE})
+
 MAX_MOVE_MINUTES = 5
 
 
@@ -49,10 +69,12 @@ class Gap:
     why_critical: str
     suggested_action: str = ""
     est_minutes: int = 0
+    action_kind: ActionKind = ActionKind.RECALL
 
     def to_dict(self) -> dict:
         d = asdict(self)
         d["target_type"] = self.target_type.value
+        d["action_kind"] = self.action_kind.value
         return d
 
 

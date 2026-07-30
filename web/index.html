@@ -204,6 +204,44 @@ textarea,input,select{font-family:inherit;font-size:inherit}
   background:var(--bg);border:1px solid var(--line-2);border-radius:8px;
   color:var(--fg-2);padding:0 9px;height:44px;outline:none;font-size:12.5px;
 }
+/* 议题模式切换。构思模式下后端会拒绝一切外部依赖的动作 */
+.mode-select{
+  background:var(--bg-3);border:1px solid var(--line-2);border-radius:7px;
+  color:var(--fg-2);padding:0 8px;height:28px;outline:none;font-size:12px;
+  flex:none;cursor:pointer;
+}
+/* 阶段进度：完整度环量的是"厚度"，这条量的是"离交付的距离" */
+.journey{
+  display:flex;align-items:center;gap:5px;margin-top:12px;
+  font-size:10.5px;color:var(--fg-3);
+}
+.journey i{color:var(--line-2);font-style:normal}
+.journey span{padding:2px 6px;border-radius:5px;border:1px solid transparent}
+.journey span.done{color:var(--fg-2)}
+.journey span.now{
+  color:var(--acc);border-color:var(--acc);background:rgba(240,184,102,.09);
+  font-weight:600;
+}
+.harvest-bar{display:flex;gap:6px;margin-top:12px}
+.harvest-bar .btn{flex:1}
+/* 条目上方的问题行 —— 让账本形成完整的 Q&A 上下文 */
+.entry-q{
+  font-size:10.5px;color:var(--fg-3);margin-bottom:5px;line-height:1.55;
+  padding-left:7px;border-left:2px solid var(--line-2);
+}
+.retype-select{
+  font-size:10px;background:transparent;color:var(--fg-3);
+  border:1px solid var(--line);border-radius:4px;outline:none;cursor:pointer;
+}
+.briefpanel{
+  position:fixed;inset:auto 0 0 0;height:62vh;background:var(--bg-2);
+  border-top:1px solid var(--line-2);display:none;flex-direction:column;z-index:60;
+}
+.briefpanel.on{display:flex}
+.brief-body{
+  flex:1;overflow:auto;margin:0;padding:18px 22px;font-family:var(--sans);
+  font-size:13px;line-height:1.75;color:var(--fg);white-space:pre-wrap;
+}
 .composer-hint{
   display:flex;align-items:center;gap:12px;margin-top:9px;
   font-size:11px;color:var(--fg-3);
@@ -533,25 +571,23 @@ textarea,input,select{font-family:inherit;font-size:inherit}
       <div class="topic-bar">
         <label>议题</label>
         <input id="topic" placeholder="你想搞清楚的是什么？（例：如何系统地教别人 AI 产品知识）">
+        <select class="mode-select" id="mode" title="构思模式不会要求你去跑实验">
+          <option value="explore">构思</option>
+          <option value="validate">验证</option>
+        </select>
       </div>
       <div class="stream" id="stream"><div class="stream-inner" id="stream-inner"></div></div>
       <div class="composer">
         <div class="composer-inner">
           <div class="composer-row">
             <textarea id="input" placeholder="扔一个想法进来。不用分类，不用想清楚，280 字以内。"></textarea>
-            <select class="type-select" id="type">
-              <option value="intent">意图</option>
-              <option value="fact">事实</option>
-              <option value="constraint">约束</option>
-              <option value="preference">偏好</option>
-              <option value="evidence">证据</option>
-            </select>
             <button class="btn" id="btn-add">收下</button>
           </div>
           <div class="composer-hint">
             <span><kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行</span>
             <span id="cc" class="charcount"></span>
             <div class="actions">
+              <button class="btn ghost sm" id="btn-correct" title="输入框里写下要纠正什么，它不会计入完整度">纠正理解</button>
               <button class="btn primary" id="btn-ask">问我一个缺口</button>
               <button class="btn ghost" id="btn-synth">生成框架</button>
             </div>
@@ -581,12 +617,33 @@ textarea,input,select{font-family:inherit;font-size:inherit}
           </div>
         </div>
         <ul class="gate-missing" id="gate-missing" style="margin-top:12px"></ul>
+        <div class="journey" id="journey">
+          <span data-stage="capture">采集</span><i>›</i>
+          <span data-stage="ask">追问</span><i>›</i>
+          <span data-stage="frame">框架</span><i>›</i>
+          <span data-stage="brief">简报</span>
+        </div>
+        <div class="harvest-bar">
+          <button class="btn ghost sm" id="btn-export" title="导出全部上下文为 markdown，可直接粘给任何 LLM">导出上下文包</button>
+          <button class="btn ghost sm" id="btn-brief" title="闸门开且已选框架后，收束成决策简报">生成简报</button>
+        </div>
       </div>
       <div class="ledger-body" id="ledger"></div>
       <div class="ledger-foot">
         <button class="btn ghost sm" id="btn-reset">清空重来</button>
       </div>
     </div>
+  </div>
+
+  <div class="briefpanel" id="briefpanel">
+    <div class="log-head">
+      <span class="log-title">决策简报</span>
+      <div style="display:flex;gap:6px">
+        <button class="btn ghost sm" id="btn-briefcopy">复制</button>
+        <button class="btn ghost sm" id="btn-briefclose">收起</button>
+      </div>
+    </div>
+    <pre class="brief-body" id="brief-body"></pre>
   </div>
 
   <div class="logpanel" id="logpanel">
@@ -670,6 +727,9 @@ function renderLedger(){
   const gm = $('#gate-missing'); gm.innerHTML = '';
   if(!g.open) for(const m of (g.missing||[])) gm.appendChild(el('li',null,m));
 
+  renderJourney(st);
+  renderHarvestBar(st);
+
   const box = $('#ledger'); box.innerHTML = '';
   if(!st.entries.length){
     const e = el('div','ledger-empty');
@@ -690,8 +750,30 @@ function renderLedger(){
     grp.appendChild(head);
     for(const it of items){
       const row = el('div','entry'+(it.source==='action'?' from-action':''));
+      // 问题行：让账本形成完整的 Q&A 上下文，而不是一堆孤立答案
+      if(it.question) row.appendChild(el('div','entry-q','问：'+it.question));
       if(it.source==='action') row.appendChild(el('span','entry-src','行动'));
       row.appendChild(document.createTextNode(it.text));
+
+      // 改类型：修正是有意识的动作，所以类型只在这里出现，输入时不出现
+      const retype = document.createElement('select');
+      retype.className = 'retype-select';
+      retype.title = '这条分类错了？改一下';
+      [['','类型…'],['directive','纠偏'],['constraint','约束'],['fact','事实'],
+       ['intent','意图'],['preference','偏好'],['evidence','证据'],
+       ['unknown','未决']].forEach(([v,label])=>{
+        const o = document.createElement('option');
+        o.value = v; o.textContent = label; retype.appendChild(o);
+      });
+      retype.onchange = async ()=>{
+        if(!retype.value) return;
+        try {
+          S.state = await req('PATCH','/api/entries/'+it.id,{type:retype.value});
+          renderLedger();
+        } catch(e){ toast(e.message,'err'); }
+      };
+      row.appendChild(retype);
+
       const del = el('button','entry-del','×');
       del.title = '删掉这条';
       del.onclick = async ()=>{
@@ -702,6 +784,57 @@ function renderLedger(){
       grp.appendChild(row);
     }
     box.appendChild(grp);
+  }
+}
+
+/* ---------------- render: 阶段进度 + 产出条 ---------------- */
+const JOURNEY = ['capture','ask','frame','brief'];
+
+function journeyStage(s){
+  if(s.brief) return 'brief';
+  if(s.picked_frame || (s.candidate_frames||[]).length) return 'frame';
+  if((s.entries||[]).length > 1 || s.cycles > 0) return 'ask';
+  return 'capture';
+}
+
+function renderJourney(st){
+  const cur = JOURNEY.indexOf(journeyStage(st));
+  document.querySelectorAll('#journey span').forEach(sp=>{
+    const i = JOURNEY.indexOf(sp.dataset.stage);
+    sp.className = i < cur ? 'done' : (i === cur ? 'now' : '');
+  });
+}
+
+function renderHarvestBar(st){
+  const g = st.gate || {};
+  const canBrief = !!(g.open && st.picked_frame);
+  const bb = $('#btn-brief');
+  if(st.brief){
+    // 已收束过：按钮变成常驻的查看入口，收起面板不等于丢失
+    bb.disabled = false;
+    bb.textContent = '查看简报';
+    bb.title = '这一轮已收束过，点击重新打开';
+  } else {
+    bb.textContent = '生成简报';
+    bb.disabled = !canBrief;
+    bb.title = canBrief
+      ? '把这一轮收束成决策简报（约 15-20 秒）'
+      : '需要：闸门已开 + 已选定一个框架';
+  }
+
+  // 饱和 = 分数封顶且闸门已开：继续追问不会再有增益，
+  // 主引导应该转向"生成框架"，否则用户会像实测那样被连问 5 轮零增益
+  const ask = $('#btn-ask'), synth = $('#btn-synth');
+  if(g.saturated){
+    ask.className = 'btn ghost';
+    synth.className = 'btn primary';
+    ask.title = '上下文已经够厚了，继续追问不会再增加完整度';
+    synth.title = '上下文已经够厚，现在生成的框架会有真实证据支撑';
+  } else {
+    ask.className = 'btn primary';
+    synth.className = 'btn ghost';
+    ask.title = '';
+    synth.title = '';
   }
 }
 
@@ -808,8 +941,10 @@ function cardMove(move){
   box.appendChild(ta);
   const row = el('div','answer-row');
   const done = el('button','btn primary sm','交付，回流进账本');
+  const shelf = el('button','btn ghost sm','搁置（记成未决）');
   const drop = el('button','btn danger sm','放弃（不扣分）');
-  row.appendChild(done); row.appendChild(drop);
+  shelf.title = '现在做不了？把它记成未决问题，不挡路，也会出现在导出的上下文包里';
+  row.appendChild(done); row.appendChild(shelf); row.appendChild(drop);
   box.appendChild(row);
   c.appendChild(box);
 
@@ -818,7 +953,7 @@ function cardMove(move){
   done.onclick = async ()=>{
     const v = ta.value.trim();
     if(!v){ toast('先写下你取回了什么。真的什么都没拿到就点放弃。','err'); ta.focus(); return; }
-    done.disabled = drop.disabled = true;
+    done.disabled = shelf.disabled = drop.disabled = true;
     try{
       const r = await req('POST','/api/done',{artifact:v});
       S.state = r; renderLedger();
@@ -833,7 +968,20 @@ function cardMove(move){
       await pollLogs();
       if(r.gate.open) cardGateOpened();
       else autoAsk();
-    }catch(e){ toast(e.message,'err'); done.disabled = drop.disabled = false; }
+    }catch(e){ toast(e.message,'err'); done.disabled = shelf.disabled = drop.disabled = false; }
+  };
+  // 搁置：单 Move 硬锁的泄压阀。实测一个外部实验 Move 造成 6 小时断档
+  shelf.onclick = async ()=>{
+    try{
+      S.state = await req('POST','/api/shelve'); renderLedger();
+      box.remove();
+      const note = el('div','retrieve');
+      note.style.borderLeftColor = 'var(--unk)';
+      note.innerHTML = `<div class="retrieve-label">已搁置</div>
+        <div class="retrieve-body">问题已记成未决，不挡路了。它会出现在导出的上下文包里。</div>`;
+      c.appendChild(note);
+      await pollLogs();
+    }catch(e){ toast(e.message,'err'); }
   };
   drop.onclick = async ()=>{
     try{
@@ -929,11 +1077,76 @@ async function doAdd(){
   if(v.length > 280){ toast(`这条 ${v.length} 字，上限 280。拆成两条。`,'err'); return; }
   setBusy(true);
   try{
-    const r = await req('POST','/api/entries',{text:v, type:$('#type').value});
+    // 不传 type —— 输入时零结构决策，类型由后端自动分类
+    const r = await req('POST','/api/entries',{text:v});
     S.state = r; renderLedger(); ta.value=''; updCC();
+    const zh = (TYPE_META[r.entry.type]||{}).zh || r.entry.type;
+    toast(`已收下，归为「${zh}」。分类错了可以在右侧改。`);
     await pollLogs();
   }catch(e){ toast(e.message,'err'); }
   finally{ setBusy(false); ta.focus(); }
+}
+
+// 纠正 LLM 的理解。权重 0，不参与完整度 —— 元指令不是世界知识
+async function doCorrect(){
+  const ta = $('#input'); const v = ta.value.trim();
+  if(!v){ toast('先在输入框写下你要纠正什么，比如「你理解错了，我在构思不在验证」。','err'); ta.focus(); return; }
+  if(v.length > 280){ toast(`这条 ${v.length} 字，上限 280。`,'err'); return; }
+  setBusy(true);
+  try{
+    S.state = await req('POST','/api/correct',{text:v});
+    renderLedger(); ta.value=''; updCC();
+    toast('已记为纠偏。它不计入完整度，但每次提问都会优先遵守。');
+    await pollLogs();
+  }catch(e){ toast(e.message,'err'); }
+  finally{ setBusy(false); ta.focus(); }
+}
+
+// 导出上下文包：复制到剪贴板 + 下载。确定性、零 LLM、永远可用
+async function doExport(){
+  try{
+    const r = await fetch('/api/export');
+    if(!r.ok) throw new Error('导出失败 HTTP '+r.status);
+    const text = await r.text();
+    try { await navigator.clipboard.writeText(text); } catch(_) {}
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], {type:'text/markdown'}));
+    a.download = 'kindling-pack.md';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast(`上下文包已复制并下载（${text.length} 字符）。可直接粘给任何 LLM。`);
+    await pollLogs();
+  }catch(e){ toast(e.message,'err'); }
+}
+
+async function doBrief(){
+  if(S.busy) return;
+  // 已经有简报：直接打开面板，不重复调 LLM（实测一次要 16 秒）
+  if(S.briefMd){ $('#briefpanel').classList.add('on'); return; }
+  setBusy(true);
+  // 简报实测要 16 秒 —— 没有进度反馈用户会以为按钮坏了
+  thinking('正在把这一轮收束成决策简报：结论、依据（带出处）、风险、未决问题…');
+  toast('正在生成简报，约 15-20 秒，请稍候…','ok',20000);
+  try{
+    const r = await req('POST','/api/brief');
+    clearThinking();
+    S.state = r; renderLedger();
+    showBrief(r.brief_markdown || '');
+    toast('简报已生成。已在下方面板打开，可复制带走。');
+    await pollLogs();
+  }catch(e){
+    clearThinking();
+    if(e.status === 423) toast(e.message,'err',7000);
+    else toast(e.message,'err');
+    await pollLogs();
+  }
+  finally{ setBusy(false); }
+}
+
+function showBrief(md){
+  S.briefMd = md;
+  $('#brief-body').textContent = md;
+  $('#briefpanel').classList.add('on');
 }
 
 async function doAsk(){
@@ -1266,6 +1479,7 @@ async function boot(){
   $('#pill-model').textContent = S.state.model || '—';
   if(S.state.key) paintKeyStatus(S.state.key);
   $('#topic').value = S.state.topic || '';
+  $('#mode').value = S.state.mode || 'explore';
   renderLedger();
 
   // 每次重启都需要重新粘 key —— 直接把它作为第一件事推到用户面前，
@@ -1283,6 +1497,19 @@ async function boot(){
     cardSys('先扔几条想法进来 —— 不用分类，不用组织，写到哪算哪。攒够两三条之后，点「问我一个缺口」，让系统告诉你它缺什么。');
   } else {
     cardSys(`欢迎回来。账本里有 ${S.state.gate.total_entries} 条上下文，飞轮转了 ${S.state.cycles} 圈。`);
+    if(S.state.brief){
+      // 上一轮已经收束过：markdown 由后端提供（单一真相来源），
+      // 前端只展示，不重新调 LLM（实测生成要 16 秒）。
+      S.briefMd = S.state.brief_markdown || '';
+      $('#brief-body').textContent = S.briefMd;
+      const c = el('div','card sys');
+      c.appendChild(el('div',null,'这一轮已经有一份决策简报了。'));
+      const b = el('button','btn ghost sm','查看简报');
+      b.style.marginTop = '10px';
+      b.onclick = ()=>$('#briefpanel').classList.add('on');
+      c.appendChild(b);
+      push(c);
+    }
     if(S.state.open_move) cardMove(S.state.open_move);
     else if(S.state.candidate_frames.length) cardFrames(S.state.candidate_frames);
     else if(S.state.gate.open) cardGateOpened();
@@ -1294,6 +1521,7 @@ async function boot(){
 $('#btn-add').onclick = doAdd;
 $('#btn-ask').onclick = doAsk;
 $('#btn-synth').onclick = ()=>doSynth(false);
+$('#btn-correct').onclick = doCorrect;
 $('#input').oninput = updCC;
 $('#input').onkeydown = e => {
   if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); doAdd(); }
@@ -1301,6 +1529,27 @@ $('#input').onkeydown = e => {
 $('#topic').onchange = async ()=>{
   try{ S.state = await req('POST','/api/topic',{topic:$('#topic').value}); await pollLogs(); }
   catch(e){ toast(e.message,'err'); }
+};
+// 议题模式：构思模式下后端会拒绝一切外部依赖的动作
+$('#mode').onchange = async ()=>{
+  const m = $('#mode').value;
+  try{
+    S.state = await req('POST','/api/mode',{mode:m});
+    renderLedger();
+    cardSys(m === 'explore'
+      ? '已切到「构思」模式。接下来不会再要求你去跑系统、调接口或等上线 —— 只会让你回忆具体事例、做取舍、把模糊的东西写具体。'
+      : '已切到「验证」模式。这个阶段的价值全在真实反馈里，会要求你去拿一手证据。');
+    await pollLogs();
+  }catch(e){ toast(e.message,'err'); }
+};
+
+/* ---------------- L7 产出层 ---------------- */
+$('#btn-export').onclick = doExport;
+$('#btn-brief').onclick = doBrief;
+$('#btn-briefclose').onclick = ()=>$('#briefpanel').classList.remove('on');
+$('#btn-briefcopy').onclick = async ()=>{
+  try{ await navigator.clipboard.writeText(S.briefMd || ''); toast('简报已复制。'); }
+  catch(e){ toast('复制失败：'+e.message,'err'); }
 };
 $('#btn-settings').onclick = openSettings;
 $('#btn-close-settings').onclick = closeSettings;

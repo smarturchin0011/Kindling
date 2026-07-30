@@ -491,9 +491,9 @@ def test_brief_endpoint_persists_result(client):
     assert r.status_code == 200
     body = r.json()
     assert body["brief"]["verdict"] == "选定反直觉清单方向。"
-    assert "markdown" in body
-    assert "决策简报" in body["markdown"]
-    assert "证据清单" in body["markdown"], "简报必须带确定性附录"
+    assert "brief_markdown" in body
+    assert "决策简报" in body["brief_markdown"]
+    assert "证据清单" in body["brief_markdown"], "简报必须带确定性附录"
 
     # 刷新后简报还在
     assert client.get("/api/state").json()["brief"] is not None
@@ -506,6 +506,37 @@ def test_reset_clears_brief(client):
     client.post(f"/api/pick/{fid}")
     client.post("/api/brief")
     assert client.post("/api/reset").json()["brief"] is None
+
+
+def test_state_returns_rendered_brief_markdown(client):
+    """简报 markdown 的唯一真相来源是后端 render_brief。
+
+    前端刷新后直接展示，绝不重新调 LLM（实测生成要 16 秒）。
+    """
+    seed(client, [("事故1", "evidence"), ("事故2", "evidence"), ("受众PM", "constraint")])
+    use_llm([FRAMES, ACTION_GAP, BRIEF])
+    fid = client.post("/api/synth", json={"force": False}).json()["frames"][0]["id"]
+    client.post(f"/api/pick/{fid}")
+    client.post("/api/brief")
+
+    st = client.get("/api/state").json()
+    assert st["brief_markdown"] is not None
+    assert "证据清单" in st["brief_markdown"]
+
+
+def test_state_brief_markdown_none_when_no_brief(client):
+    assert client.get("/api/state").json()["brief_markdown"] is None
+
+
+def test_brief_response_uses_brief_markdown_key(client):
+    """响应键名与 /api/state 一致，前端只认一个键。"""
+    seed(client, [("事故1", "evidence"), ("事故2", "evidence"), ("受众PM", "constraint")])
+    use_llm([FRAMES, ACTION_GAP, BRIEF])
+    fid = client.post("/api/synth", json={"force": False}).json()["frames"][0]["id"]
+    client.post(f"/api/pick/{fid}")
+    body = client.post("/api/brief").json()
+    assert "brief_markdown" in body
+    assert "证据清单" in body["brief_markdown"]
 
 
 # ---------- 可观测性 ----------

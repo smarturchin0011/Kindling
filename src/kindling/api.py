@@ -136,6 +136,9 @@ def api_state():
     snap["temperature"] = s.temperature
     snap["has_key"] = has_key()
     snap["key"] = key_status()
+    # 简报的 markdown 由后端渲染（单一真相来源）。前端刷新后可直接展示，
+    # 不必重新调 LLM —— 实测简报生成要 16 秒。
+    snap["brief_markdown"] = render_brief(st.brief, st) if st.brief else None
     return snap
 
 
@@ -506,7 +509,8 @@ def api_brief():
     st.save()
     return {
         "brief": brief,
-        "markdown": render_brief(brief, st),
+        # 键名与 /api/state 保持一致，前端只认一个键
+        "brief_markdown": render_brief(brief, st),
         **st.snapshot(),
     }
 

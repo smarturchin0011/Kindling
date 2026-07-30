@@ -591,12 +591,7 @@ def api_brief():
         raise HTTPException(status_code=422, detail=str(exc))
     st.brief = brief
     st.save()
-    return {
-        "brief": brief,
-        # 键名与 /api/state 保持一致，前端只认一个键
-        "brief_markdown": render_brief(brief, st),
-        **st.snapshot(),
-    }
+    return snapshot_with_brief(st)
 
 
 # ---------------- 设置 / 凭据 / 模型目录 ----------------

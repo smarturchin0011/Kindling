@@ -409,8 +409,11 @@ def api_pick(frame_id: str):
         )
 
     picked.status = "picked"
+    # 旧的 picked 也要降级 —— 否则 picked_frame()（取第一个）会返回旧框架，
+    # 且账本会累积多条「选定框架…」约束（实测污染过）。
+    # 降级不是丢弃：它会出现在导出包的「已放弃的方向」里，探索过的路也是信息。
     for f in st.frames:
-        if f.id != frame_id and f.status == "candidate":
+        if f.id != frame_id and f.status in ("candidate", "picked"):
             f.status = "superseded"
 
     # 选择本身是一条上下文：它记录了你自愿承担的代价

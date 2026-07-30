@@ -224,6 +224,23 @@ textarea,input,select{font-family:inherit;font-size:inherit}
 }
 .harvest-bar{display:flex;gap:6px;margin-top:12px}
 .harvest-bar .btn{flex:1}
+/* 框架横幅：已选框架是里程碑，必须有常驻锚点。
+   之前它只在聊天流里闪过一次，滚走就找不到 —— 里程碑住在瞬态消息流里是错位。 */
+.frame-banner{
+  display:flex;align-items:center;gap:9px;padding:8px 18px;
+  background:rgba(240,184,102,.06);border-bottom:1px solid var(--line);
+  font-size:12.5px;flex:none;
+}
+.fb-flag{color:var(--acc);flex:none}
+.fb-name{color:var(--acc);font-weight:700;flex:none}
+.fb-thesis{
+  color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;flex:1;min-width:0;
+}
+.fb-expand{
+  padding:10px 18px;background:var(--bg-2);border-bottom:1px solid var(--line);
+  font-size:12px;color:var(--fg-2);line-height:1.75;flex:none;
+}
 /* 条目上方的问题行 —— 让账本形成完整的 Q&A 上下文 */
 .entry-q{
   font-size:10.5px;color:var(--fg-3);margin-bottom:5px;line-height:1.55;
@@ -576,6 +593,14 @@ textarea,input,select{font-family:inherit;font-size:inherit}
           <option value="validate">验证</option>
         </select>
       </div>
+      <div class="frame-banner" id="frame-banner" style="display:none">
+        <span class="fb-flag">⚑</span>
+        <span class="fb-name" id="fb-name"></span>
+        <span class="fb-thesis" id="fb-thesis"></span>
+        <button class="btn ghost sm" id="fb-detail">详情</button>
+        <button class="btn ghost sm" id="fb-swap" title="重新生成竞争框架，当前方向会保留在「已放弃」里">换方向</button>
+      </div>
+      <div class="fb-expand" id="fb-expand" style="display:none"></div>
       <div class="stream" id="stream"><div class="stream-inner" id="stream-inner"></div></div>
       <div class="composer">
         <div class="composer-inner">
@@ -729,6 +754,7 @@ function renderLedger(){
 
   renderJourney(st);
   renderHarvestBar(st);
+  renderFrameBanner(st);
 
   const box = $('#ledger'); box.innerHTML = '';
   if(!st.entries.length){
@@ -790,6 +816,21 @@ function renderLedger(){
 /* ---------------- render: 阶段进度 + 产出条 ---------------- */
 const JOURNEY = ['capture','ask','frame','brief'];
 
+/* 框架横幅：已选框架是构思阶段的里程碑，需要常驻锚点。
+   后端一直在用它（每次提问都注入 prompt、导出和简报都带它），
+   缺的只是视觉锚点 —— 之前它只在聊天流里闪过一次就滚走了。 */
+function renderFrameBanner(st){
+  const f = st.picked_frame, bn = $('#frame-banner');
+  if(!f){
+    bn.style.display = 'none';
+    $('#fb-expand').style.display = 'none';
+    return;
+  }
+  bn.style.display = 'flex';
+  $('#fb-name').textContent = '「'+f.name+'」';
+  $('#fb-thesis').textContent = f.thesis;
+}
+
 function journeyStage(s){
   if(s.brief) return 'brief';
   if(s.picked_frame || (s.candidate_frames||[]).length) return 'frame';
@@ -823,9 +864,11 @@ function renderHarvestBar(st){
   }
 
   // 饱和 = 分数封顶且闸门已开：继续追问不会再有增益，
-  // 主引导应该转向"生成框架"，否则用户会像实测那样被连问 5 轮零增益
+  // 主引导应该转向"生成框架"，否则用户会像实测那样被连问 5 轮零增益。
+  // 但已经选定框架之后就不该再催 synth —— 那时的下一步是收束成简报。
   const ask = $('#btn-ask'), synth = $('#btn-synth');
-  if(g.saturated){
+  const pushSynth = g.saturated && !st.picked_frame;
+  if(pushSynth){
     ask.className = 'btn ghost';
     synth.className = 'btn primary';
     ask.title = '上下文已经够厚了，继续追问不会再增加完整度';
@@ -833,8 +876,14 @@ function renderHarvestBar(st){
   } else {
     ask.className = 'btn primary';
     synth.className = 'btn ghost';
-    ask.title = '';
-    synth.title = '';
+    ask.title = st.picked_frame ? '继续在这个框架下追问，把它填实' : '';
+    synth.title = st.picked_frame ? '重新生成竞争框架（当前方向会降级保留）' : '';
+  }
+  // 已选框架 + 闸门开 + 还没简报 → 真正的下一步是收束
+  if(st.picked_frame && g.open && !st.brief){
+    bb.className = 'btn primary sm';
+  } else {
+    bb.className = 'btn ghost sm';
   }
 }
 
@@ -1200,7 +1249,7 @@ async function doPick(fid, btn){
     const r = await req('POST','/api/pick/'+fid);
     clearThinking();
     S.state = r; renderLedger();
-    cardSys(`已选定「${r.frame.name}」。其余框架已降级 —— 不要回头比较。`);
+    cardSys(`已选定「${r.frame.name}」。它现在固定在顶部横幅上 —— 接下来的每个追问都会围绕它展开，直到你收束成简报。其余框架已降级，不要回头比较。`);
     cardMove(r.move);
   }catch(e){
     clearThinking(); toast(e.message,'err'); if(btn) btn.disabled = false;
@@ -1541,6 +1590,25 @@ $('#mode').onchange = async ()=>{
       : '已切到「验证」模式。这个阶段的价值全在真实反馈里，会要求你去拿一手证据。');
     await pollLogs();
   }catch(e){ toast(e.message,'err'); }
+};
+
+/* ---------------- 框架横幅 ---------------- */
+$('#fb-detail').onclick = ()=>{
+  const x = $('#fb-expand'), f = S.state && S.state.picked_frame;
+  if(!f) return;
+  if(x.style.display === 'none'){
+    x.innerHTML = `<b>主张：</b>${esc(f.thesis)}<br>`
+      + `<b>优化：</b>${esc(f.optimizes_for)}<br>`
+      + `<b>自愿牺牲：</b>${esc(f.sacrifices)}`
+      + (f.grounded_count ? `<br><b>依据：</b>${f.grounded_count} 条具体上下文` : '');
+    x.style.display = 'block';
+  } else {
+    x.style.display = 'none';
+  }
+};
+$('#fb-swap').onclick = ()=>{
+  if(!confirm('重新生成竞争框架？当前方向会降级保留在「已放弃的方向」里（导出包仍会带上它）。')) return;
+  doSynth(false);
 };
 
 /* ---------------- L7 产出层 ---------------- */

@@ -430,6 +430,28 @@ def test_pick_blocked_while_move_open(client):
     assert client.post(f"/api/pick/{fid}").status_code == 409
 
 
+def test_repick_supersedes_old_picked_frame(client):
+    """换方向后重新选择：旧 picked 必须降级，picked_frame 永远只有一个。
+
+    实测污染：用户账本里出现了两条「选定框架…」约束，因为旧 picked 没降级。
+    """
+    seed(client, [("事故1", "evidence"), ("事故2", "evidence"), ("受众PM", "constraint")])
+    use_llm([FRAMES, ACTION_GAP, FRAMES, ACTION_GAP])
+    fid1 = client.post("/api/synth", json={"force": False}).json()["frames"][0]["id"]
+    client.post(f"/api/pick/{fid1}")
+    client.post("/api/drop")  # 释放 pick 强制生成的 move
+
+    fid2 = client.post("/api/synth", json={"force": False}).json()["frames"][0]["id"]
+    body = client.post(f"/api/pick/{fid2}").json()
+
+    assert body["picked_frame"]["id"] == fid2
+    st = client.get("/api/state").json()
+    assert st["picked_frame"]["id"] == fid2
+    # 旧 picked 必须已降级 —— 导出包里它会出现在「已放弃的方向」
+    pack = client.get("/api/export").text
+    assert "已放弃的方向" in pack
+
+
 # ---------- L7 产出层 ----------
 
 

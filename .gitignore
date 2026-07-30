@@ -8,3 +8,6 @@ state.json
 *.json.tmp
 settings.json
 .dev-state.json
+
+# 开发过程文档（实施计划）。本地保留，不进公开仓库。
+.hermes/

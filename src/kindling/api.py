@@ -69,6 +69,17 @@ def load_store() -> Store:
     return Store().load()
 
 
+def snapshot_with_brief(st: Store) -> dict:
+    """snapshot + 渲染好的简报 markdown。
+
+    任何会切换/改变议题的端点都必须用这个 —— 否则前端拿不到
+    brief_markdown，点「查看简报」会白白重新调一次 LLM（实测 16 秒）。
+    """
+    snap = st.snapshot()
+    snap["brief_markdown"] = render_brief(st.brief, st) if st.brief else None
+    return snap
+
+
 # ---------------- 请求模型 ----------------
 
 
@@ -142,15 +153,12 @@ def index():
 @app.get("/api/state")
 def api_state():
     st = load_store()
-    snap = st.snapshot()
+    snap = snapshot_with_brief(st)
     s = load_settings()
     snap["model"] = s.model
     snap["temperature"] = s.temperature
     snap["has_key"] = has_key()
     snap["key"] = key_status()
-    # 简报的 markdown 由后端渲染（单一真相来源）。前端刷新后可直接展示，
-    # 不必重新调 LLM —— 实测简报生成要 16 秒。
-    snap["brief_markdown"] = render_brief(st.brief, st) if st.brief else None
     return snap
 
 
@@ -196,7 +204,12 @@ def api_create_topic(req: CreateTopicReq):
     （议题标题字符串），同名会被覆盖成字符串。
     """
     t = create_topic(req.title)
-    return {"created": t, **load_store().snapshot()}
+    st = load_store()
+    # 议题标题同时作为 store.topic —— 它会进 prompt 和导出包的第一行
+    if req.title.strip():
+        st.topic = req.title.strip()
+        st.save()
+    return {"created": t, **snapshot_with_brief(st)}
 
 
 @app.post("/api/topics/{topic_id}/switch")
@@ -206,7 +219,7 @@ def api_switch_topic(topic_id: str):
         switch_topic(topic_id)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    return load_store().snapshot()
+    return snapshot_with_brief(load_store())
 
 
 @app.delete("/api/topics/{topic_id}")

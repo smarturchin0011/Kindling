@@ -119,6 +119,36 @@ def test_topic_title_writes_back_to_index(tclient):
     assert tclient.get("/api/topics").json()["topics"][0]["title"] == "改过的标题"
 
 
+def test_create_topic_sets_store_topic(tclient):
+    """议题标题同时是 store.topic —— 它会进 prompt 和导出包第一行。"""
+    r = tclient.post("/api/topics", json={"title": "新方案讨论"})
+    assert r.json()["topic"] == "新方案讨论"
+    assert "新方案讨论" in tclient.get("/api/export").text
+
+
+def test_switch_carries_brief_markdown(tclient):
+    """切议题的响应必须带 brief_markdown —— 否则前端点「查看简报」
+    会白白重新调一次 LLM（实测 16 秒）。"""
+    a = tclient.post("/api/topics", json={"title": "有简报的议题"}).json()["created"]["id"]
+    seed(tclient, [("事故1", "evidence"), ("事故2", "evidence"), ("受众PM", "constraint")])
+    use_llm([FRAMES, ACTION_GAP, BRIEF])
+    fid = tclient.post("/api/synth", json={"force": False}).json()["frames"][0]["id"]
+    tclient.post(f"/api/pick/{fid}")
+    tclient.post("/api/brief")
+
+    tclient.post("/api/topics", json={"title": "另一个议题"})     # 切走
+    body = tclient.post(f"/api/topics/{a}/switch").json()          # 再切回
+
+    assert body["brief"] is not None
+    assert body["brief_markdown"] is not None
+    assert "证据清单" in body["brief_markdown"]
+
+
+def test_create_topic_carries_brief_markdown_key(tclient):
+    body = tclient.post("/api/topics", json={"title": "新的"}).json()
+    assert "brief_markdown" in body and body["brief_markdown"] is None
+
+
 def test_state_works_with_no_topics_yet(tclient):
     """空环境直接访问 /api/state：自动建默认议题，不 500。"""
     r = tclient.get("/api/state")

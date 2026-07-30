@@ -254,6 +254,48 @@ textarea,input,select{font-family:inherit;font-size:inherit}
   position:fixed;inset:auto 0 0 0;height:62vh;background:var(--bg-2);
   border-top:1px solid var(--line-2);display:none;flex-direction:column;z-index:60;
 }
+/* 主页：议题列表。上下文是资产，"换个话题就得毁掉资产"是不可接受的。 */
+.homepage{
+  position:fixed;inset:0;background:var(--bg);z-index:70;
+  display:none;overflow-y:auto;
+}
+.homepage.on{display:block}
+.home-inner{max-width:860px;margin:0 auto;padding:56px 26px 40px}
+.home-head{
+  display:flex;align-items:flex-start;justify-content:space-between;
+  gap:16px;margin-bottom:26px;
+}
+.home-title{font-size:22px;font-weight:700;color:var(--fg)}
+.home-sub{font-size:12px;color:var(--fg-3);margin-top:5px}
+.home-list{display:flex;flex-direction:column;gap:9px}
+.home-card{
+  position:relative;padding:14px 16px;border:1px solid var(--line);
+  border-radius:10px;background:var(--bg-2);cursor:pointer;
+  transition:border-color .14s,background .14s;
+}
+.home-card:hover{border-color:var(--line-2);background:var(--bg-3)}
+.home-card.cur{border-color:var(--acc);box-shadow:inset 2px 0 0 var(--acc)}
+.hc-title{font-size:14px;font-weight:600;color:var(--fg);padding-right:28px}
+.hc-meta{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  font-size:11px;color:var(--fg-3);margin-top:7px;
+}
+.hc-tag{
+  font-size:10px;padding:1px 6px;border-radius:4px;
+  background:var(--bg-4);color:var(--fg-2);
+}
+.hc-tag.now{background:#1f1a10;color:var(--acc)}
+.hc-tag.brief{background:#12251a;color:var(--ok)}
+.hc-tag.frame{background:#1f1a10;color:var(--ev)}
+.hc-arch{
+  position:absolute;right:9px;top:9px;opacity:0;font-size:15px;
+  color:var(--fg-3);padding:0 5px;transition:opacity .13s;
+}
+.home-card:hover .hc-arch{opacity:1}
+.hc-arch:hover{color:var(--err)}
+.home-empty{
+  padding:40px 0;text-align:center;font-size:13px;color:var(--fg-3);
+}
 .briefpanel.on{display:flex}
 .brief-body{
   flex:1;overflow:auto;margin:0;padding:18px 22px;font-family:var(--sans);
@@ -501,6 +543,7 @@ textarea,input,select{font-family:inherit;font-size:inherit}
       <span class="pill" id="pill-model">—</span>
       <span class="pill" id="pill-key">key?</span>
       <div class="sep"></div>
+      <button class="btn ghost sm" id="btn-home">⌂ 议题</button>
       <button class="btn ghost sm" id="btn-settings">设置</button>
       <button class="btn ghost sm" id="btn-log">内部 Log</button>
     </div>
@@ -662,6 +705,22 @@ textarea,input,select{font-family:inherit;font-size:inherit}
       <div class="ledger-foot">
         <button class="btn ghost sm" id="btn-reset">清空重来</button>
       </div>
+    </div>
+  </div>
+
+  <div class="homepage" id="homepage">
+    <div class="home-inner">
+      <div class="home-head">
+        <div>
+          <div class="home-title">议题</div>
+          <div class="home-sub">每个议题有独立的上下文、框架和简报。切换随时可逆。</div>
+        </div>
+        <div style="display:flex;gap:7px">
+          <button class="btn primary" id="btn-newtopic">＋ 新议题</button>
+          <button class="btn ghost" id="btn-homeclose">返回</button>
+        </div>
+      </div>
+      <div class="home-list" id="home-list"></div>
     </div>
   </div>
 
@@ -1546,6 +1605,39 @@ function updCC(){
   cc.className = 'charcount'+(n>280?' over':'');
 }
 
+/* 把当前 S.state 反映到工作区（议题栏、模式、账本、框架横幅）。
+   boot 与「切换议题」共用 —— 切议题本质上就是重放一次状态恢复。 */
+function applyState(){
+  $('#topic').value = S.state.topic || '';
+  $('#mode').value = S.state.mode || 'explore';
+  S.briefMd = S.state.brief_markdown || '';
+  $('#brief-body').textContent = S.briefMd;
+  $('#briefpanel').classList.remove('on');
+  renderLedger();
+}
+
+/* 恢复聊天流里的卡片：欢迎语 / 已有简报 / 进行中的动作 / 候选框架。 */
+function restoreCards(){
+  if(!S.state.entries.length){
+    cardSys('先扔几条想法进来 —— 不用分类，不用组织，写到哪算哪。攒够两三条之后，点「问我一个缺口」，让系统告诉你它缺什么。');
+    return;
+  }
+  cardSys(`欢迎回来。账本里有 ${S.state.gate.total_entries} 条上下文，飞轮转了 ${S.state.cycles} 圈。`);
+  if(S.state.brief){
+    // markdown 由后端提供（单一真相来源），不重新调 LLM（实测生成要 16 秒）
+    const c = el('div','card sys');
+    c.appendChild(el('div',null,'这一轮已经有一份决策简报了。'));
+    const b = el('button','btn ghost sm','查看简报');
+    b.style.marginTop = '10px';
+    b.onclick = ()=>$('#briefpanel').classList.add('on');
+    c.appendChild(b);
+    push(c);
+  }
+  if(S.state.open_move) cardMove(S.state.open_move);
+  else if((S.state.candidate_frames||[]).length) cardFrames(S.state.candidate_frames);
+  else if(S.state.gate.open) cardGateOpened();
+}
+
 async function boot(){
   try{
     S.state = await req('GET','/api/state');
@@ -1554,9 +1646,7 @@ async function boot(){
   }
   $('#pill-model').textContent = S.state.model || '—';
   if(S.state.key) paintKeyStatus(S.state.key);
-  $('#topic').value = S.state.topic || '';
-  $('#mode').value = S.state.mode || 'explore';
-  renderLedger();
+  applyState();
 
   // 每次重启都需要重新粘 key —— 直接把它作为第一件事推到用户面前，
   // 而不是等他点了「问我一个缺口」才撞上 502。
@@ -1569,27 +1659,7 @@ async function boot(){
     return;
   }
 
-  if(!S.state.entries.length){
-    cardSys('先扔几条想法进来 —— 不用分类，不用组织，写到哪算哪。攒够两三条之后，点「问我一个缺口」，让系统告诉你它缺什么。');
-  } else {
-    cardSys(`欢迎回来。账本里有 ${S.state.gate.total_entries} 条上下文，飞轮转了 ${S.state.cycles} 圈。`);
-    if(S.state.brief){
-      // 上一轮已经收束过：markdown 由后端提供（单一真相来源），
-      // 前端只展示，不重新调 LLM（实测生成要 16 秒）。
-      S.briefMd = S.state.brief_markdown || '';
-      $('#brief-body').textContent = S.briefMd;
-      const c = el('div','card sys');
-      c.appendChild(el('div',null,'这一轮已经有一份决策简报了。'));
-      const b = el('button','btn ghost sm','查看简报');
-      b.style.marginTop = '10px';
-      b.onclick = ()=>$('#briefpanel').classList.add('on');
-      c.appendChild(b);
-      push(c);
-    }
-    if(S.state.open_move) cardMove(S.state.open_move);
-    else if(S.state.candidate_frames.length) cardFrames(S.state.candidate_frames);
-    else if(S.state.gate.open) cardGateOpened();
-  }
+  restoreCards();
   await pollLogs();
   setInterval(pollLogs, 2500);
 }
@@ -1619,6 +1689,86 @@ $('#mode').onchange = async ()=>{
   }catch(e){ toast(e.message,'err'); }
 };
 
+/* ---------------- 主页：多议题 ---------------- */
+function relTime(iso){
+  if(!iso) return '';
+  const d = (Date.now() - new Date(iso).getTime())/1000;
+  if(d < 60) return '刚刚';
+  if(d < 3600) return Math.floor(d/60)+' 分钟前';
+  if(d < 86400) return Math.floor(d/3600)+' 小时前';
+  if(d < 86400*30) return Math.floor(d/86400)+' 天前';
+  return new Date(iso).toLocaleDateString('zh-CN');
+}
+
+async function openHome(){
+  let d;
+  try{ d = await req('GET','/api/topics'); }
+  catch(e){ toast(e.message,'err'); return; }
+
+  const box = $('#home-list'); box.innerHTML = '';
+  if(!d.topics.length){
+    box.appendChild(el('div','home-empty','还没有议题。点「＋ 新议题」开始。'));
+  }
+  for(const t of d.topics){
+    const c = el('div','home-card'+(t.current?' cur':''));
+
+    c.appendChild(el('div','hc-title', t.title));
+
+    const meta = el('div','hc-meta');
+    if(t.current) meta.appendChild(el('span','hc-tag now','当前'));
+    meta.appendChild(el('span','hc-tag', t.mode==='explore'?'构思':'验证'));
+    meta.appendChild(el('span',null,`完整度 ${t.percent}%`));
+    meta.appendChild(el('span',null,`飞轮 ${t.cycles} 圈`));
+    meta.appendChild(el('span',null,`${t.entries} 条上下文`));
+    if(t.has_frame) meta.appendChild(el('span','hc-tag frame','⚑ 已选框架'));
+    if(t.has_brief) meta.appendChild(el('span','hc-tag brief','✓ 有简报'));
+    meta.appendChild(el('span',null, relTime(t.updated_at)));
+    c.appendChild(meta);
+
+    // 点卡片 = 切换（可逆，像切会话）
+    c.onclick = async ()=>{
+      if(t.current){ closeHome(); return; }
+      try{
+        S.state = await req('POST',`/api/topics/${t.id}/switch`);
+        closeHome();
+        switchView(t.title);
+      }catch(e){ toast(e.message,'err'); }
+    };
+
+    // × = 归档（和切换是两件事，文件永久保留）
+    const arch = el('button','hc-arch','×');
+    arch.title = '归档这个议题（数据文件保留，不会删除）';
+    arch.onclick = async (e)=>{
+      e.stopPropagation();
+      if(!confirm(`归档「${t.title}」？\n\n它会从列表里移走，但数据文件永久保留。`)) return;
+      try{
+        await req('DELETE','/api/topics/'+t.id);
+        if(t.current){
+          S.state = await req('GET','/api/state');
+          switchView('');
+        }
+        openHome();
+      }catch(e2){ toast(e2.message,'err'); }
+    };
+    c.appendChild(arch);
+
+    box.appendChild(c);
+  }
+  $('#homepage').classList.add('on');
+}
+
+function closeHome(){ $('#homepage').classList.remove('on'); }
+
+/* 切议题后重置工作区：清空聊天流，重放状态恢复。 */
+function switchView(title){
+  $('#stream-inner').innerHTML = '';
+  S.pendingGap = null;
+  applyState();
+  restoreCards();
+  if(title) toast(`已切到「${title}」`);
+  pollLogs();
+}
+
 /* ---------------- 框架横幅 ---------------- */
 $('#fb-detail').onclick = ()=>{
   const x = $('#fb-expand'), f = S.state && S.state.picked_frame;
@@ -1645,6 +1795,18 @@ $('#btn-briefclose').onclick = ()=>$('#briefpanel').classList.remove('on');
 $('#btn-briefcopy').onclick = async ()=>{
   try{ await navigator.clipboard.writeText(S.briefMd || ''); toast('简报已复制。'); }
   catch(e){ toast('复制失败：'+e.message,'err'); }
+};
+$('#btn-home').onclick = openHome;
+$('#btn-homeclose').onclick = closeHome;
+$('#btn-newtopic').onclick = async ()=>{
+  const title = prompt('新议题叫什么？（可留空，之后在议题栏改）');
+  if(title === null) return;   // 取消
+  try{
+    S.state = await req('POST','/api/topics',{title});
+    closeHome();
+    switchView(S.state.topic || '未命名议题');
+    setTimeout(()=>$(S.state.topic ? '#input' : '#topic').focus(), 80);
+  }catch(e){ toast(e.message,'err'); }
 };
 $('#btn-settings').onclick = openSettings;
 $('#btn-close-settings').onclick = closeSettings;

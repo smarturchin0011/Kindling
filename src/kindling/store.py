@@ -33,7 +33,17 @@ class MoveAlreadyOpen(RuntimeError):
 
 
 def state_path() -> Path:
-    return Path(os.environ.get("KINDLING_STATE", str(DEFAULT_PATH)))
+    """当前议题的 state 文件。
+
+    KINDLING_STATE 优先：测试用它做隔离，也保留给单文件模式。
+    未设时走多议题路径（topics.json 索引里的 current_id）。
+    """
+    env = os.environ.get("KINDLING_STATE")
+    if env:
+        return Path(env)
+    from .topics import current_state_path
+
+    return current_state_path()
 
 
 class Store:
@@ -90,6 +100,12 @@ class Store:
                 encoding="utf-8",
             )
             tmp.replace(self.path)
+        # 回写议题索引的 updated_at / 标题，让主页能显示最近活动。
+        # 文件名即议题 id（top_xxx.json）；KINDLING_STATE 单文件模式下会静默跳过。
+        if self.path.stem.startswith("top_"):
+            from .topics import touch_topic
+
+            touch_topic(self.path.stem, self.topic or None)
 
     # ---------- 写 ----------
 

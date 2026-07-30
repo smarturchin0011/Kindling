@@ -36,6 +36,97 @@ def seed(client, items):
         assert r.status_code == 200, r.text
 
 
+@pytest.fixture
+def tclient(tmp_path, monkeypatch):
+    """多议题模式的 client：不设 KINDLING_STATE，改用 KINDLING_HOME。"""
+    monkeypatch.delenv("KINDLING_STATE", raising=False)
+    monkeypatch.setenv("KINDLING_HOME", str(tmp_path))
+    api.set_llm(None)
+    with TestClient(api.app) as c:
+        yield c
+    api.set_llm(None)
+
+
+# ---------- 多议题 ----------
+
+
+def test_topics_independent_contexts(tclient):
+    """每个议题有完全独立的上下文 —— 换话题不再需要清空重来。"""
+    a = tclient.post("/api/topics", json={"title": "议题A"}).json()["created"]["id"]
+    tclient.post("/api/entries", json={"text": "A 的想法", "type": "intent"})
+
+    b = tclient.post("/api/topics", json={"title": "议题B"}).json()["created"]["id"]
+    assert tclient.get("/api/state").json()["entries"] == [], "新议题必须是空的"
+    tclient.post("/api/entries", json={"text": "B 的想法", "type": "intent"})
+
+    # 切回 A：数据完整
+    tclient.post(f"/api/topics/{a}/switch")
+    assert tclient.get("/api/state").json()["entries"][0]["text"] == "A 的想法"
+    # 再切回 B：也完整（切换可逆）
+    tclient.post(f"/api/topics/{b}/switch")
+    assert tclient.get("/api/state").json()["entries"][0]["text"] == "B 的想法"
+
+
+def test_topics_list_carries_progress(tclient):
+    tclient.post("/api/topics", json={"title": "带进度的议题"})
+    seed(tclient, [("事故1", "evidence"), ("受众PM", "constraint")])
+
+    d = tclient.get("/api/topics").json()
+    t = d["topics"][0]
+    assert t["title"] == "带进度的议题"
+    assert t["entries"] == 2
+    assert t["percent"] > 0
+    assert t["mode"] == "explore", "新议题默认构思模式"
+    assert t["current"] is True
+    assert t["has_brief"] is False
+    assert d["current_id"] == t["id"]
+
+
+def test_switch_is_not_archive(tclient):
+    """切换不能让议题消失 —— 它和归档是两件事。"""
+    a = tclient.post("/api/topics", json={"title": "A"}).json()["created"]["id"]
+    b = tclient.post("/api/topics", json={"title": "B"}).json()["created"]["id"]
+    tclient.post(f"/api/topics/{a}/switch")
+    titles = {t["title"] for t in tclient.get("/api/topics").json()["topics"]}
+    assert titles == {"A", "B"}
+
+
+def test_archive_removes_from_list(tclient):
+    a = tclient.post("/api/topics", json={"title": "A"}).json()["created"]["id"]
+    tclient.post("/api/topics", json={"title": "B"})
+    assert tclient.delete(f"/api/topics/{a}").status_code == 200
+    titles = {t["title"] for t in tclient.get("/api/topics").json()["topics"]}
+    assert titles == {"B"}
+    # include_archived 仍能看到
+    all_titles = {
+        t["title"]
+        for t in tclient.get("/api/topics?include_archived=true").json()["topics"]
+    }
+    assert all_titles == {"A", "B"}
+
+
+def test_switch_unknown_topic_404(tclient):
+    assert tclient.post("/api/topics/top_nope/switch").status_code == 404
+
+
+def test_archive_unknown_topic_404(tclient):
+    assert tclient.delete("/api/topics/top_nope").status_code == 404
+
+
+def test_topic_title_writes_back_to_index(tclient):
+    tclient.post("/api/topics", json={"title": ""})
+    tclient.post("/api/topic", json={"topic": "改过的标题"})
+    assert tclient.get("/api/topics").json()["topics"][0]["title"] == "改过的标题"
+
+
+def test_state_works_with_no_topics_yet(tclient):
+    """空环境直接访问 /api/state：自动建默认议题，不 500。"""
+    r = tclient.get("/api/state")
+    assert r.status_code == 200
+    assert r.json()["mode"] == "explore"
+    assert len(tclient.get("/api/topics").json()["topics"]) == 1
+
+
 # ---------- 采集 ----------
 
 

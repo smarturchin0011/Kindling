@@ -31,6 +31,14 @@ from .settings import Settings, load_settings, save_settings
 from .shelve import shelve_move
 from .store import VALID_MODES, MoveAlreadyOpen, Store
 from .synth import GateClosed, synthesize
+from .topics import (
+    TopicIndex,
+    archive_topic,
+    create_topic,
+    list_topics,
+    switch_topic,
+    topic_state_path,
+)
 
 # 只加载项目根 .env（可选，主要给 CI / 自动化用）。
 # 刻意不扫描 home 目录或其他应用的配置：隐式借用别处的凭据会让用户
@@ -85,6 +93,10 @@ class TopicReq(BaseModel):
 
 class ModeReq(BaseModel):
     mode: str
+
+
+class CreateTopicReq(BaseModel):
+    title: str = Field(default="", max_length=200)
 
 
 class CorrectReq(BaseModel):
@@ -149,6 +161,62 @@ def api_topic(req: TopicReq):
     st.save()
     log("capture", f"议题设为：{st.topic or '(空)'}")
     return st.snapshot()
+
+
+# ---------------- 多议题 ----------------
+
+
+@app.get("/api/topics")
+def api_list_topics(include_archived: bool = False):
+    """议题列表 + 每个议题的进度摘要（给主页用）。"""
+    idx = TopicIndex.load()
+    out = []
+    for t in list_topics(include_archived):
+        st = Store(topic_state_path(t["id"])).load()
+        g = st.completeness()
+        out.append({
+            **t,
+            "mode": st.mode,
+            "entries": len(st.entries),
+            "percent": g["percent"],
+            "gate_open": g["open"],
+            "cycles": len(st.done_moves()),
+            "has_brief": st.brief is not None,
+            "has_frame": st.picked_frame() is not None,
+            "current": t["id"] == idx.current_id,
+        })
+    return {"topics": out, "current_id": idx.current_id}
+
+
+@app.post("/api/topics")
+def api_create_topic(req: CreateTopicReq):
+    """新建议题并切换过去。默认构思模式。
+
+    响应键用 created 而不是 topic —— snapshot 里已有一个 topic 键
+    （议题标题字符串），同名会被覆盖成字符串。
+    """
+    t = create_topic(req.title)
+    return {"created": t, **load_store().snapshot()}
+
+
+@app.post("/api/topics/{topic_id}/switch")
+def api_switch_topic(topic_id: str):
+    """切换议题。可逆 —— 随时可以切回来，像切会话。"""
+    try:
+        switch_topic(topic_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return load_store().snapshot()
+
+
+@app.delete("/api/topics/{topic_id}")
+def api_archive_topic(topic_id: str):
+    """归档议题（不是删除）。文件永久保留 —— 上下文是资产。"""
+    try:
+        t = archive_topic(topic_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"archived": t}
 
 
 @app.post("/api/mode")

@@ -55,4 +55,4 @@ CI / 自动化可用环境变量 `OPENROUTER_API_KEY`（运行时输入优先级
 | 完整度阈值 | 默认 60%。调低更容易拿到框架 —— 但那正是「漂亮空框架」的来源 |
 | 最少证据 / 约束条数 | 闸门的结构性下限 |
 
-模型/阈值等设置存在 `settings.json`（已 gitignore）。**key 不在其中。**
+模型/阈值等设置存在 `settings.json`（已 gitignore）。
